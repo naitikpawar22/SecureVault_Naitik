@@ -1,0 +1,36 @@
+# Dependency directories
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Environment and secrets - Protect credentials from public GitHub repo
+*.env
+*.env.*
+server/DB.env
+server/S3.env
+server/.env
+DB.env
+s3.env
+!.env.example
+!client/.env.production
+!client/.env.example
+!server/.env.example
+!server/DB.env.example
+!server/S3.env.example
+
+# Build outputs
+dist/
+client/dist/
+build/
+
+# Uploads and temporary files
+server/uploads/
+uploads/
+*.log
+npm-debug.log*
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

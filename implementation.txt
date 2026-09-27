@@ -1,0 +1,269 @@
+# Project: SecureVault – Secure File Sharing Application
+
+Build a complete, secure, production-minded file-sharing web application named **SecureVault**. Develop the frontend, backend, database, and storage modules separately with clean, maintainable code.
+
+## 1. Technology Stack
+
+* Frontend: React + Vite + Tailwind CSS
+* Backend: Node.js + Express.js
+* Database: MongoDB Atlas with Mongoose
+* File Storage: Private Amazon S3 bucket
+* Authentication: JWT, bcrypt, role-based access control
+* Encryption: Web Crypto API, AES-256-GCM and ECDH
+* File uploads: Streaming and multipart upload support for large files
+
+## 2. Project Structure
+
+Create separate folders and files for every module. Use a structure similar to:
+
+* `client/` – React frontend
+
+  * `src/components/`
+  * `src/pages/`
+  * `src/layouts/`
+  * `src/services/`
+  * `src/hooks/`
+  * `src/context/`
+  * `src/utils/`
+* `server/` – Express backend
+
+  * `src/config/`
+  * `src/controllers/`
+  * `src/routes/`
+  * `src/models/`
+  * `src/middleware/`
+  * `src/services/`
+  * `src/utils/`
+  * `src/validators/`
+* `server/.env` – private backend configuration
+* `server/.env.example` – example variable names only
+* `README.md` – setup and security documentation
+
+Do not put the entire application in one file. Keep routes, controllers, models, services, middleware, and UI components separate.
+
+## 3. Environment Configuration
+
+Create separate configuration files:
+
+* `server/DB.env` for MongoDB configuration
+* `server/S3.env` for AWS S3 configuration
+* `server/.env` for other backend secrets, if needed
+
+Load these files only on the backend using dotenv. Do not expose them to React or include them in the frontend build.
+
+Use placeholder values in example files. I will enter my actual credentials locally. Never print, log, commit, or expose secrets.
+
+Example MongoDB variables:
+`MONGODB_URI=`
+`DB_NAME=securevault`
+
+Example AWS variables:
+`AWS_REGION=`
+`AWS_S3_BUCKET=`
+`AWS_ACCESS_KEY_ID=`
+`AWS_SECRET_ACCESS_KEY=`
+
+Support the standard AWS credential provider chain so production can use an IAM role instead of static keys. Add all environment files to `.gitignore`.
+
+## 4. Authentication and User Roles
+
+* Create secure registration and login.
+* Hash passwords using bcrypt.
+* Use JWT authentication with expiration.
+* Add logout and protected routes.
+* Implement roles: Owner and Viewer.
+* Validate user permissions on every protected API request.
+* Add rate limiting and input validation.
+* Never store passwords or raw encryption keys in plain text.
+
+## 5. Secure File Management
+
+* Upload, list, download, preview, and delete files.
+* Support large files using streaming or multipart uploads.
+* Encrypt files in the browser before uploading.
+* Upload only encrypted file content to the backend/S3.
+* Decrypt files in the browser after authorized download.
+* Store file metadata and S3 object keys in MongoDB.
+* Keep the S3 bucket private and block public access.
+* Never create public S3 object URLs.
+* Use short-lived, authorized download access where needed.
+* Validate file size, file type, ownership, and permissions.
+
+## 6. Encryption and Sharing
+
+* Use AES-256-GCM for file encryption.
+* Use ECDH to establish secure key sharing.
+* Keep decryption keys out of MongoDB, server logs, and S3.
+* Implement secure sharing with Owner and Viewer permissions.
+* Allow the owner to revoke access.
+* Explain key rotation and re-encryption behavior in the documentation.
+* Do not claim that revocation can erase a file or key already downloaded by another user.
+
+## 7. Audit Logs
+
+Create an audit log system for:
+
+* File upload
+* File download
+* File deletion
+* Share and access revocation
+* Login and security-related events
+
+Add the endpoint `/audit/:fileId`. Only authorized users should be able to view the relevant audit records. Never log passwords, tokens, file contents, or secret keys.
+
+## 8. Frontend UI
+
+Create a professional, responsive dashboard with:
+
+* Login and registration pages
+* File upload drag-and-drop area
+* File list with name, size, date, and owner
+* Upload progress and error messages
+* File preview for supported PDFs
+* Share-file dialog
+* Permission management
+* Audit history page
+* Responsive mobile layout
+* Loading, empty, and error states
+
+Build reusable components and keep API calls in separate service files.
+
+## 9. Backend API
+
+Create REST API routes and separate controllers/services for:
+
+* Authentication
+* User management
+* File upload and download
+* File sharing and permissions
+* Access revocation
+* Audit logs
+
+Use centralized error handling, request validation, secure CORS configuration, Helmet, and appropriate request size limits.
+
+## 10. Security Requirements
+
+* Never store AWS credentials or MongoDB secrets in frontend code.
+* Never commit real environment files.
+* Use least-privilege AWS permissions limited to the required S3 bucket.
+* Do not make the S3 bucket public.
+* Do not trust filenames or file metadata supplied by users.
+* Prevent unauthorized file access and insecure direct object references.
+* Avoid loading complete large files into server memory.
+* Use HTTPS in deployment.
+* Add security comments where important and document known limitations.
+
+## 11. Development and Testing
+
+* Create root scripts to run frontend and backend separately.
+* Add `.env.example` files with placeholders only.
+* Add API validation and authentication tests.
+* Test upload, download, sharing, revocation, and audit logging.
+* Test unauthorized access and invalid file uploads.
+* Fix errors before considering a module complete.
+* Do not use fake success responses or leave core features as TODOs.
+
+## 12. Documentation
+
+Write a detailed README with:
+
+* Project overview and architecture
+* Installation steps
+* Required environment variables
+* How to configure MongoDB Atlas
+* How to configure a private S3 bucket and IAM permissions
+* How to run frontend and backend
+* API endpoints
+* Security design and limitations
+* Testing and deployment instructions
+
+First inspect the existing project files. Preserve working code where possible. Then build each module step by step, verify it, and continue until the complete application works. Ask me only for configuration details that cannot be safely inferred. Do not ask me to paste secrets into the chat.
+## 13. Traditional and Professional UI Design
+
+Keep the entire SecureVault website traditional, simple, and professional. Do not make the design overly attractive, flashy, or decorative.
+
+* Use a clean, minimal layout with a professional color palette such as navy blue, white, and light gray.
+* Use simple typography with clear headings and readable text.
+* Keep buttons, forms, tables, and cards straightforward and consistent.
+* Avoid excessive animations, gradients, glowing effects, glassmorphism, oversized text, and unnecessary hover effects.
+* Use subtle borders, light shadows, and consistent spacing only where needed.
+* Prioritize usability, accessibility, readability, and security over visual decoration.
+* Make the interface responsive for desktop, tablet, and mobile.
+* Keep the dashboard practical and easy to navigate, like a traditional professional business application.
+* Do not add unnecessary sections, decorative graphics, or features that are not required.
+* Maintain the same professional design across login, dashboard, file management, sharing, and audit pages.
+## 14. Separate MongoDB Database Schemas
+
+Create a dedicated `server/src/models/` folder. Define each MongoDB collection in its own Mongoose model file. Do not put all schemas in one file.
+
+Create these models:
+
+1. **User.js**
+
+   * `name`
+   * `email` (unique, normalized)
+   * `passwordHash`
+   * `role` (user/admin, with secure defaults)
+   * `publicKey` (for encryption key sharing)
+   * `mfaEnabled`
+   * `createdAt`, `updatedAt`
+   * Never store plaintext passwords or private encryption keys.
+
+2. **File.js**
+
+   * `originalName`
+   * `ownerId` (reference to User)
+   * `s3ObjectKey` (private object key, not a public URL)
+   * `encryptedSize`
+   * `mimeType`
+   * `encryptedFileKey` only if securely wrapped for the owner
+   * `encryptionAlgorithm`
+   * `iv` and required encryption metadata
+   * `status`
+   * `createdAt`, `updatedAt`
+   * Do not store plaintext file contents or unencrypted file keys.
+
+3. **FilePermission.js**
+
+   * `fileId` (reference to File)
+   * `userId` (reference to User)
+   * `role` (viewer or owner, as applicable)
+   * `wrappedFileKey` (encrypted for the recipient)
+   * `grantedBy`
+   * `createdAt`
+   * Add a unique compound index on `fileId` and `userId`.
+
+4. **AuditLog.js**
+
+   * `fileId`
+   * `actorId`
+   * `action` (upload, download, share, revoke, delete, etc.)
+   * `timestamp`
+   * `ipAddress` only when necessary and handled appropriately
+   * `metadata` containing safe, non-secret details
+   * Never log passwords, JWTs, file contents, or encryption secrets.
+
+5. **RefreshToken.js** (only if refresh tokens are implemented)
+
+   * `userId`
+   * `tokenHash`
+   * `expiresAt`
+   * `revokedAt`
+   * Use hashed tokens and expiration cleanup.
+
+## 15. Database Design Requirements
+
+* Keep all schemas in separate files and export each model properly.
+* Create a separate database connection module in `server/src/config/db.js`.
+* Use MongoDB Atlas and read the connection string from the backend environment configuration.
+* Use schema validation, required fields, enums, timestamps, and appropriate indexes.
+* Use references between collections where appropriate.
+* Add indexes for frequently used queries, including owner, file, user, and audit timestamp.
+* Enforce file ownership and permissions in backend services—not only in the frontend.
+* Ensure a user cannot access another user's files by changing an ID in the request.
+* Use transactions only where supported and needed; handle partial failures safely.
+* Add validation for all API inputs and return safe error messages.
+* Do not create duplicate models or collections unnecessarily.
+* Document the purpose and relationships of every collection in the README.
+
+Before implementing the models, provide a brief database schema overview showing each collection, its fields, references, and indexes. Then implement the models and connect them to the appropriate controllers and services. Ensure the final application uses these schemas consistently.

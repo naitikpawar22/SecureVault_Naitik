@@ -79,6 +79,7 @@ const complete = async (req, res, next) => {
       iv,
       encryptedSize,
       folderId,
+      searchTokens,
     } = req.body;
 
     if (!uploadId || !s3ObjectKey || !parts || !Array.isArray(parts)) {
@@ -98,6 +99,20 @@ const complete = async (req, res, next) => {
       }
     }
 
+    // Parse searchTokens
+    let parsedTokens = [];
+    if (searchTokens) {
+      if (Array.isArray(searchTokens)) {
+        parsedTokens = searchTokens;
+      } else if (typeof searchTokens === 'string') {
+        try {
+          parsedTokens = JSON.parse(searchTokens);
+        } catch {
+          parsedTokens = searchTokens.split(',').map((t) => t.trim()).filter(Boolean);
+        }
+      }
+    }
+
     // 3. Create document in MongoDB Atlas File collection
     const file = await File.create({
       originalName: originalName.trim(),
@@ -110,6 +125,7 @@ const complete = async (req, res, next) => {
       encryptionAlgorithm: 'AES-256-GCM',
       iv,
       status: 'active',
+      searchTokens: parsedTokens,
     });
 
     // 4. Log audit event

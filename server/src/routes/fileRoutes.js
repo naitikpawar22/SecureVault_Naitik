@@ -33,8 +33,9 @@ router.post(
   fileController.uploadFile
 );
 
-// === File Listing & Details ===
+// === File Listing, Search & Details ===
 router.get('/', fileController.listFiles);
+router.get('/encrypted-search', fileController.encryptedSearch);
 router.get('/:id', checkFileAccess('viewer'), fileController.getFile);
 router.get('/:id/download', checkFileAccess('viewer'), fileController.downloadFile);
 router.patch('/:id/rename', checkFileAccess('owner'), fileController.renameFile);

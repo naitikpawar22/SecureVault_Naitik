@@ -3,6 +3,7 @@ import {
   generateFileKey,
   encryptFile,
   wrapFileKeyForRecipient,
+  generateFileSearchTokens,
 } from '../utils/crypto';
 
 const CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunk size (AWS S3 standard multipart minimum is 5MB)
@@ -76,6 +77,7 @@ export async function uploadEncryptedFile({
   const wrappedKeyBundle = await wrapFileKeyForRecipient(fek, activePublicKey);
 
   const totalEncryptedBytes = encryptedBuffer.byteLength;
+  const searchTokens = await generateFileSearchTokens(file.name);
 
   // Convert to high-performance Blob and free raw Uint8Array from JavaScript heap
   const encryptedBlob = new Blob([encryptedBuffer], { type: 'application/octet-stream' });
@@ -215,6 +217,7 @@ export async function uploadEncryptedFile({
       iv,
       encryptedSize: totalEncryptedBytes,
       folderId: folderId || null,
+      searchTokens,
     });
 
     onProgress(100);
@@ -233,6 +236,7 @@ export async function uploadEncryptedFile({
   formData.append('encryptedSize', totalEncryptedBytes.toString());
   formData.append('iv', iv);
   formData.append('encryptedFileKey', JSON.stringify(wrappedKeyBundle));
+  formData.append('searchTokens', JSON.stringify(searchTokens));
   if (folderId) {
     formData.append('folderId', folderId);
   }

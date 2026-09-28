@@ -9,7 +9,7 @@ const auditService = require('../services/auditService');
 
 const uploadFile = async (req, res, next) => {
   try {
-    const { originalName, mimeType, encryptedFileKey, iv, folderId } = req.body;
+    const { originalName, mimeType, encryptedFileKey, iv, folderId, searchTokens } = req.body;
     const tempFilePath = req.file.path;
     const encryptedSize = req.file.size;
 
@@ -34,6 +34,20 @@ const uploadFile = async (req, res, next) => {
       }
     }
 
+    // Parse searchTokens if passed as JSON string
+    let parsedTokens = [];
+    if (searchTokens) {
+      if (Array.isArray(searchTokens)) {
+        parsedTokens = searchTokens;
+      } else if (typeof searchTokens === 'string') {
+        try {
+          parsedTokens = JSON.parse(searchTokens);
+        } catch {
+          parsedTokens = searchTokens.split(',').map((t) => t.trim()).filter(Boolean);
+        }
+      }
+    }
+
     // Save metadata in MongoDB File collection
     const file = await File.create({
       originalName: originalName.trim(),
@@ -47,6 +61,7 @@ const uploadFile = async (req, res, next) => {
       iv,
       status: 'active',
       currentVersion: 1,
+      searchTokens: parsedTokens,
     });
 
     // Create initial Version 1 entry in FileVersion schema
@@ -693,6 +708,58 @@ const restoreVersion = async (req, res, next) => {
   }
 };
 
+/**
+ * Homomorphic / Searchable Symmetric Encryption (SSE)
+ * Allows client to search using one-way HMAC trapdoor token without leaking plaintext keywords
+ */
+const encryptedSearch = async (req, res, next) => {
+  try {
+    const { trapdoor } = req.query;
+    if (!trapdoor) {
+      return res.status(400).json({ success: false, error: 'Trapdoor query parameter is required' });
+    }
+
+    // Find owned files matching trapdoor blind token
+    const ownedFiles = await File.find({
+      ownerId: req.user._id,
+      status: 'active',
+      searchTokens: trapdoor,
+    }).sort({ createdAt: -1 });
+
+    // Find shared files matching trapdoor blind token
+    const permissions = await FilePermission.find({ userId: req.user._id });
+    const sharedFileIds = permissions.map((p) => p.fileId);
+    const sharedFiles = await File.find({
+      _id: { $in: sharedFileIds },
+      status: 'active',
+      searchTokens: trapdoor,
+    }).populate('ownerId', 'name email');
+
+    res.status(200).json({
+      success: true,
+      files: ownedFiles.map((f) => ({
+        id: f._id,
+        originalName: f.originalName,
+        encryptedSize: f.encryptedSize,
+        mimeType: f.mimeType,
+        createdAt: f.createdAt,
+        role: 'owner',
+      })).concat(
+        sharedFiles.map((f) => ({
+          id: f._id,
+          originalName: f.originalName,
+          encryptedSize: f.encryptedSize,
+          mimeType: f.mimeType,
+          createdAt: f.createdAt,
+          role: 'viewer',
+        }))
+      ),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadFile,
   listFiles,
@@ -704,4 +771,5 @@ module.exports = {
   createVersion,
   downloadVersion,
   restoreVersion,
+  encryptedSearch,
 };

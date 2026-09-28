@@ -59,6 +59,12 @@ const fileSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
+    searchTokens: {
+      // Homomorphic / Searchable Symmetric Encryption (SSE) trapdoor blind index tokens
+      type: [String],
+      default: [],
+      index: true,
+    },
   },
   {
     timestamps: true,

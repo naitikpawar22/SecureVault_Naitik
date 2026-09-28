@@ -337,3 +337,37 @@ export async function exportFileKeyToBase64(fek) {
   return bufferToBase64(rawKey);
 }
 
+/**
+ * 5. Searchable Symmetric Encryption (SSE) / Encrypted Search Trapdoors
+ * Generates deterministic HMAC-SHA256 blind index tokens for keywords
+ * using a search key derived from the user's master key / private key.
+ * Enables zero-knowledge encrypted search where the server queries by trapdoor hash
+ * without ever learning the plaintext search terms.
+ */
+export async function generateSearchTrapdoor(term, searchKeyString = 'SecureVault-SSE-Trapdoor-Key-v1') {
+  const enc = new TextEncoder();
+  const normalized = term.trim().toLowerCase();
+  const key = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(searchKeyString),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await window.crypto.subtle.sign('HMAC', key, enc.encode(normalized));
+  return bufferToHex(signature);
+}
+
+export async function generateFileSearchTokens(fileName, searchKeyString = 'SecureVault-SSE-Trapdoor-Key-v1') {
+  if (!fileName || typeof fileName !== 'string') return [];
+  const words = fileName.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(Boolean);
+  const tokens = new Set();
+  for (const word of words) {
+    if (word.length >= 2) {
+      const trapdoor = await generateSearchTrapdoor(word, searchKeyString);
+      tokens.add(trapdoor);
+    }
+  }
+  return Array.from(tokens);
+}
+

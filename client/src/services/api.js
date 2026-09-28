@@ -102,6 +102,9 @@ export const api = {
     },
     delete: (id) => request(`/files/${id}`, { method: 'DELETE' }),
 
+    // Encrypted Search (Searchable Symmetric Encryption / Homomorphic Trapdoors)
+    encryptedSearch: (trapdoor) => request(`/files/encrypted-search?trapdoor=${encodeURIComponent(trapdoor)}`),
+
     // File Rename
     rename: (id, name) => request(`/files/${id}/rename`, { method: 'PATCH', body: JSON.stringify({ name }) }),
 

@@ -1,4 +1,6 @@
 const auditService = require('../services/auditService');
+const File = require('../models/File');
+const Folder = require('../models/Folder');
 
 const getFileAuditLogs = async (req, res, next) => {
   try {
@@ -34,7 +36,25 @@ const getFileAuditLogs = async (req, res, next) => {
 
 const getMyAuditLogs = async (req, res, next) => {
   try {
-    const filter = req.user.role === 'admin' ? {} : { actorId: req.user._id };
+    let filter = { actorId: req.user._id };
+    if (req.user.role === 'admin') {
+      filter = {};
+    } else {
+      const [userFiles, userFolders] = await Promise.all([
+        File.find({ ownerId: req.user._id }).select('_id'),
+        Folder.find({ ownerId: req.user._id }).select('_id'),
+      ]);
+      const fileIds = userFiles.map((f) => f._id);
+      const folderIds = userFolders.map((f) => f._id);
+
+      filter = {
+        $or: [
+          { actorId: req.user._id },
+          { fileId: { $in: fileIds } },
+          { folderId: { $in: folderIds } },
+        ],
+      };
+    }
     const logs = await auditService.getLogs(filter, 100);
 
     const formatted = logs.map((log) => ({

@@ -42,6 +42,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    mfaSecret: {
+      type: String,
+      default: null,
+      select: false,
+    },
     avatar: {
       type: String,
       default: '',
@@ -52,10 +57,11 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Never expose passwordHash or internal sensitive data in toJSON
+// Never expose passwordHash, mfaSecret or internal sensitive data in toJSON
 userSchema.methods.toJSON = function () {
   const user = this.toObject();
   delete user.passwordHash;
+  delete user.mfaSecret;
   delete user.__v;
   return user;
 };

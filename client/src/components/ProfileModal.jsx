@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import {
@@ -17,7 +18,10 @@ import {
   Smile,
   Crown,
   Zap,
+  Smartphone,
+  ShieldCheck,
 } from 'lucide-react';
+import MfaModal from './MfaModal';
 
 const PRESET_AVATARS = [
   { id: 'preset:shield', label: 'Shield', icon: Shield, bg: 'bg-blue-600' },
@@ -34,6 +38,7 @@ export default function ProfileModal({ isOpen, onClose }) {
   const { user, updateUser } = useAuth();
   const [name, setName] = useState(user?.name || '');
   const [selectedAvatar, setSelectedAvatar] = useState(user?.avatar || '');
+  const [showMfaModal, setShowMfaModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -139,9 +144,9 @@ export default function ProfileModal({ isOpen, onClose }) {
     );
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col relative z-10">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div className="flex items-center space-x-2.5">
@@ -228,6 +233,42 @@ export default function ProfileModal({ isOpen, onClose }) {
             />
           </div>
 
+          {/* Google Authenticator Two-Factor Security Option */}
+          {!user?.mfaEnabled ? (
+            <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-amber-900 font-semibold text-xs">
+                  <Smartphone className="w-4 h-4 text-amber-600" />
+                  <span>Google Authenticator (TOTP)</span>
+                </div>
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-200/60 px-2 py-0.5 rounded-full">
+                  Not Added
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                Add Google Authenticator to protect your vault with 6-digit verification codes every time you sign in.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowMfaModal(true)}
+                className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>Join Google Authenticator App</span>
+              </button>
+            </div>
+          ) : (
+            <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-2 text-emerald-900 font-semibold text-xs">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span>Google Authenticator Active</span>
+              </div>
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-200/60 px-2 py-0.5 rounded-full">
+                Protected
+              </span>
+            </div>
+          )}
+
           {/* Preset Profile Icons */}
           <div className="space-y-2 pt-1">
             <label className="block text-xs font-semibold text-slate-700">
@@ -294,6 +335,20 @@ export default function ProfileModal({ isOpen, onClose }) {
           </div>
         </form>
       </div>
-    </div>
+
+      {/* Google Authenticator Setup Modal */}
+      <MfaModal
+        isOpen={showMfaModal}
+        onClose={() => setShowMfaModal(false)}
+        mode="setup"
+        title="Join Google Authenticator"
+        description="Scan the QR code in Google Authenticator or enter the setup key manually, then enter the 6-digit verification code."
+        onSuccess={(res) => {
+          updateUser({ mfaEnabled: true, mfaVerified: true });
+          setShowMfaModal(false);
+        }}
+      />
+    </div>,
+    document.body
   );
 }

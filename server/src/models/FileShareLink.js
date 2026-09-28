@@ -47,6 +47,15 @@ const fileShareLinkSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    isDisabled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    allowDownload: {
+      type: Boolean,
+      default: true,
+    },
     createdAt: {
       type: Date,
       default: Date.now,

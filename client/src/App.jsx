@@ -11,6 +11,11 @@ import UnlockModal from './components/UnlockModal';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import PublicSharedView from './pages/PublicSharedView';
+import AccessRequestsPage from './pages/AccessRequestsPage';
+import NotificationsDropdown from './components/NotificationsDropdown';
+import UploadCornerWidget from './components/UploadCornerWidget';
+import MfaModal from './components/MfaModal';
+import { useUpload } from './context/UploadContext';
 import {
   Loader2,
   Menu,
@@ -19,15 +24,19 @@ import {
   Shield,
   KeyRound,
   ShieldCheck,
+  Smartphone,
 } from 'lucide-react';
 
 export default function App() {
-  const { isAuthenticated, loading, user, privateKey } = useAuth();
+  const { isAuthenticated, loading, user, privateKey, updateUser } = useAuth();
+  const { activeUploads, dismissAll, uploadFiles, uploadFolder } = useUpload();
   const [authView, setAuthView] = useState('login'); // 'login' | 'register'
-  const [activeTab, setActiveTab] = useState('files'); // 'files' | 'shared' | 'audit' | 'starred' | 'spam' | 'bin'
+  const [activeTab, setActiveTab] = useState('files'); // 'files' | 'requests' | 'shared' | 'audit' | 'starred' | 'spam' | 'bin'
   const [totalBytes, setTotalBytes] = useState(0);
   const [unreadSharedCount, setUnreadSharedCount] = useState(0);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const [showMfaModal, setShowMfaModal] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
 
@@ -73,38 +82,101 @@ export default function App() {
     }
   };
 
+  // Poll for pending access requests for the owner
+  const checkPendingRequests = async () => {
+    if (!isAuthenticated || !user) return;
+    try {
+      const res = await api.accessRequests.listOwner('pending');
+      if (res.success) {
+        setPendingRequestsCount(res.requests?.length || 0);
+      }
+    } catch (err) {
+      // ignore polling errors
+    }
+  };
+
   useEffect(() => {
     if (isAuthenticated) {
       checkUnreadShared();
-      const interval = setInterval(checkUnreadShared, 8000);
+      checkPendingRequests();
+      const interval = setInterval(() => {
+        checkUnreadShared();
+        checkPendingRequests();
+      }, 7000);
       return () => clearInterval(interval);
     }
   }, [isAuthenticated, user, activeTab]);
 
-  // Hash route parsing for shareable links: /#shared/:token?key=...
-  const parseSharedHash = (hash) => {
-    if (hash.startsWith('#shared/')) {
-      const parts = hash.replace('#shared/', '').split('?');
-      const token = parts[0];
-      const params = new URLSearchParams(parts[1] || '');
-      let key = params.get('key');
-      if (key && key.includes(' ') && !key.includes('+')) {
-        key = key.replace(/ /g, '+');
+  // Multi-format route parsing for shareable links:
+  // Supports /#shared/:token, /#/shared/:token, /#shared-folder-:token, /#share/:token,
+  // /share/:token (pathname), /shared/:token (pathname), and ?share=:token
+  const parseSharedRoute = () => {
+    const hash = window.location.hash || '';
+    const pathname = window.location.pathname || '';
+    const searchParams = new URLSearchParams(window.location.search || '');
+
+    // 1. Pathname check: /share/:token or /shared/:token or /shared/link/:token
+    const pathParts = pathname.split('/').filter(Boolean);
+    if (pathParts[0] === 'share' || pathParts[0] === 'shared') {
+      let token = pathParts[1];
+      if (token === 'link' && pathParts[2]) {
+        token = pathParts[2];
       }
-      return { token, key };
+      if (token) {
+        let key = searchParams.get('key');
+        if (key && key.includes(' ') && !key.includes('+')) key = key.replace(/ /g, '+');
+        return { token, key };
+      }
     }
+
+    // 2. Hash check
+    if (hash) {
+      let clean = hash.startsWith('#') ? hash.slice(1) : hash;
+      if (clean.startsWith('/')) clean = clean.slice(1);
+
+      if (clean.startsWith('shared-folder-')) {
+        const parts = clean.replace('shared-folder-', '').split('?');
+        const token = parts[0];
+        const params = new URLSearchParams(parts[1] || '');
+        let key = params.get('key') || searchParams.get('key');
+        if (key && key.includes(' ') && !key.includes('+')) key = key.replace(/ /g, '+');
+        return { token, key };
+      }
+
+      if (clean.startsWith('shared/') || clean.startsWith('share/')) {
+        const parts = clean.replace(/^(shared|share)\//, '').split('?');
+        const token = parts[0];
+        const params = new URLSearchParams(parts[1] || '');
+        let key = params.get('key') || searchParams.get('key');
+        if (key && key.includes(' ') && !key.includes('+')) key = key.replace(/ /g, '+');
+        return { token, key };
+      }
+    }
+
+    // 3. Query string check: ?share=:token or ?token=:token
+    const queryToken = searchParams.get('share') || searchParams.get('token') || searchParams.get('shared');
+    if (queryToken) {
+      let key = searchParams.get('key');
+      if (key && key.includes(' ') && !key.includes('+')) key = key.replace(/ /g, '+');
+      return { token: queryToken, key };
+    }
+
     return null;
   };
 
-  const [sharedRoute, setSharedRoute] = useState(() => parseSharedHash(window.location.hash));
+  const [sharedRoute, setSharedRoute] = useState(() => parseSharedRoute());
 
   useEffect(() => {
-    const handleHashChange = () => {
-      setSharedRoute(parseSharedHash(window.location.hash));
+    const handleRouteChange = () => {
+      setSharedRoute(parseSharedRoute());
     };
 
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('hashchange', handleRouteChange);
+    window.addEventListener('popstate', handleRouteChange);
+    return () => {
+      window.removeEventListener('hashchange', handleRouteChange);
+      window.removeEventListener('popstate', handleRouteChange);
+    };
   }, []);
 
   // If viewing a public tokenized shareable link
@@ -114,7 +186,10 @@ export default function App() {
         token={sharedRoute.token}
         keyParam={sharedRoute.key}
         onGoHome={() => {
-          window.location.hash = '';
+          if (window.location.hash) window.location.hash = '';
+          if (window.location.pathname !== '/') {
+            window.history.pushState(null, '', '/');
+          }
           setSharedRoute(null);
         }}
       />
@@ -148,7 +223,17 @@ export default function App() {
           setActiveTab={setActiveTab}
           totalBytes={totalBytes}
           unreadSharedCount={unreadSharedCount}
+          pendingRequestsCount={pendingRequestsCount}
           onUnlockKey={() => setShowUnlockModal(true)}
+          onNewFolder={() => window.dispatchEvent(new CustomEvent('vault:new-folder'))}
+          onFileUpload={(files) => {
+            setActiveTab('files');
+            uploadFiles(files);
+          }}
+          onFolderUpload={(files) => {
+            setActiveTab('files');
+            uploadFolder(files);
+          }}
         />
       </div>
 
@@ -177,11 +262,26 @@ export default function App() {
               }}
               totalBytes={totalBytes}
               unreadSharedCount={unreadSharedCount}
+              pendingRequestsCount={pendingRequestsCount}
               onUnlockKey={() => {
                 setShowUnlockModal(true);
                 setMobileSidebarOpen(false);
               }}
               onCloseMobile={() => setMobileSidebarOpen(false)}
+              onNewFolder={() => {
+                setMobileSidebarOpen(false);
+                window.dispatchEvent(new CustomEvent('vault:new-folder'));
+              }}
+              onFileUpload={(files) => {
+                setMobileSidebarOpen(false);
+                setActiveTab('files');
+                uploadFiles(files);
+              }}
+              onFolderUpload={(files) => {
+                setMobileSidebarOpen(false);
+                setActiveTab('files');
+                uploadFolder(files);
+              }}
             />
           </div>
         </div>
@@ -214,13 +314,28 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right Header: Clean and minimal without user profile or zero-knowledge badge */}
-          <div className="flex items-center space-x-3">
+          {/* Right Header: Notifications and Cryptographic Key Status */}
+          <div className="flex items-center space-x-2">
+            {/* Join Google Authenticator Button (Only shown if NOT already added) */}
+            {!user?.mfaEnabled && (
+              <button
+                type="button"
+                onClick={() => setShowMfaModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 transition-colors shadow-2xs"
+                title="Join Google Authenticator 2FA"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-amber-700" />
+                <span className="hidden sm:inline">Join Google Authenticator</span>
+              </button>
+            )}
+
+            <NotificationsDropdown onNavigateTab={setActiveTab} />
+
             {!privateKey && (
               <button
                 type="button"
                 onClick={() => setShowUnlockModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 transition-colors shadow-2xs"
               >
                 <KeyRound className="w-3.5 h-3.5 text-amber-700" />
                 <span>Unlock Key</span>
@@ -237,6 +352,8 @@ export default function App() {
               setActiveTab={setActiveTab}
               onUpdateTotalBytes={setTotalBytes}
             />
+          ) : activeTab === 'requests' ? (
+            <AccessRequestsPage />
           ) : activeTab === 'shared' ? (
             <DashboardPage
               activeTab="shared"
@@ -267,6 +384,22 @@ export default function App() {
         onClose={() => setShowUnlockModal(false)}
         onSuccess={() => setShowUnlockModal(false)}
       />
+
+      {/* Google Authenticator Setup Modal */}
+      <MfaModal
+        isOpen={showMfaModal}
+        onClose={() => setShowMfaModal(false)}
+        mode="setup"
+        title="Join Google Authenticator"
+        description="Scan the QR code in Google Authenticator or enter the setup key manually, then enter the 6-digit verification code."
+        onSuccess={() => {
+          updateUser({ mfaEnabled: true, mfaVerified: true });
+          setShowMfaModal(false);
+        }}
+      />
+
+      {/* Floating Global Upload Progress Line & Corner Widget across all tabs */}
+      <UploadCornerWidget uploads={activeUploads} onDismissAll={dismissAll} />
     </div>
   );
 }

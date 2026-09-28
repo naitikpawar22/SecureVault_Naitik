@@ -75,9 +75,10 @@ export async function exportPrivateKey(key) {
  * Import ECDH Public Key from JWK
  */
 export async function importPublicKey(jwk) {
+  const parsed = typeof jwk === 'string' ? JSON.parse(jwk) : jwk;
   return await window.crypto.subtle.importKey(
     'jwk',
-    jwk,
+    parsed,
     {
       name: 'ECDH',
       namedCurve: 'P-256',
@@ -91,9 +92,10 @@ export async function importPublicKey(jwk) {
  * Import ECDH Private Key from JWK
  */
 export async function importPrivateKey(jwk) {
+  const parsed = typeof jwk === 'string' ? JSON.parse(jwk) : jwk;
   return await window.crypto.subtle.importKey(
     'jwk',
-    jwk,
+    parsed,
     {
       name: 'ECDH',
       namedCurve: 'P-256',

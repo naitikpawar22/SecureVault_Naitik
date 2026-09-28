@@ -51,7 +51,11 @@ async function request(endpoint, options = {}) {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `HTTP error ${response.status}`);
+    const err = new Error(errorData.error || `HTTP error ${response.status}`);
+    err.status = response.status;
+    err.code = errorData.code;
+    err.data = errorData;
+    throw err;
   }
 
   // If response is raw binary/stream (e.g. file download)
@@ -69,12 +73,16 @@ async function request(endpoint, options = {}) {
 }
 
 export const api = {
-  // Authentication
+  // Authentication & MFA
   auth: {
     register: (data) => request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
     login: (data) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
     logout: () => request('/auth/logout', { method: 'POST' }),
     getMe: () => request('/auth/me'),
+    setupMfa: () => request('/auth/mfa/setup', { method: 'POST' }),
+    verifyMfaSetup: (data) => request('/auth/mfa/verify-setup', { method: 'POST', body: JSON.stringify(data) }),
+    verifyMfa: (data) => request('/auth/mfa/verify', { method: 'POST', body: JSON.stringify(data) }),
+    disableMfa: (data) => request('/auth/mfa/disable', { method: 'POST', body: JSON.stringify(data) }),
   },
 
   // Files
@@ -88,7 +96,10 @@ export const api = {
     },
     get: (id) => request(`/files/${id}`),
     upload: (formData) => request('/files/upload', { method: 'POST', body: formData }),
-    download: (id) => request(`/files/${id}/download`),
+    download: (id, purpose = '') => {
+      const qs = purpose ? `?purpose=${encodeURIComponent(purpose)}` : '';
+      return request(`/files/${id}/download${qs}`);
+    },
     delete: (id) => request(`/files/${id}`, { method: 'DELETE' }),
 
     // File Rename
@@ -103,13 +114,13 @@ export const api = {
     // Shareable Links (ACL Engine)
     createShareLink: (fileId, data) => request(`/files/${fileId}/share-link`, { method: 'POST', body: JSON.stringify(data) }),
     listShareLinks: (fileId) => request(`/files/${fileId}/share-links`),
-    getShareLinks: (fileId) => request(`/files/${fileId}/share-links`), // Alias for compatibility
+    getShareLinks: (fileId) => request(`/files/${fileId}/share-links`),
     revokeShareLink: (fileId, linkId) => request(`/files/${fileId}/share-link/${linkId}`, { method: 'DELETE' }),
 
     // Key Rotation & Re-encryption
     rotateKey: (fileId, formData) => request(`/files/${fileId}/rotate-key`, { method: 'POST', body: formData }),
 
-    // File Versions
+    // File Versions (Requirement 7)
     listVersions: (fileId) => request(`/files/${fileId}/versions`),
     createVersion: (fileId, formData) => request(`/files/${fileId}/versions`, { method: 'POST', body: formData }),
     downloadVersion: (fileId, versionNumber, purpose = '') => {
@@ -145,6 +156,33 @@ export const api = {
     getShareLinks: (id) => request(`/folders/${id}/share-links`),
     revokeShareLink: (id, linkId) => request(`/folders/${id}/share-link/${linkId}`, { method: 'DELETE' }),
     getLogs: (id) => request(`/folders/${id}/audit`),
+  },
+
+  // Access Requests (Requirements 3, 4, 5)
+  accessRequests: {
+    create: (data) => request('/access-requests', { method: 'POST', body: JSON.stringify(data) }),
+    getStatus: (token) => request(`/access-requests/status/${token}`),
+    listOwner: (status = '') => request(`/access-requests/owner${status ? `?status=${status}` : ''}`),
+    approve: (id, data) => request(`/access-requests/${id}/approve`, { method: 'POST', body: JSON.stringify(data) }),
+    reject: (id, data) => request(`/access-requests/${id}/reject`, { method: 'POST', body: JSON.stringify(data) }),
+  },
+
+  // Owner Access Management (Requirement 8)
+  manageAccess: {
+    getFile: (fileId) => request(`/files/${fileId}/manage-access`),
+    updateFilePermission: (fileId, userId, data) => request(`/files/${fileId}/permissions/${userId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    revokeFileRecipient: (fileId, userId) => request(`/files/${fileId}/permissions/${userId}`, { method: 'DELETE' }),
+    updateFileShareLink: (fileId, linkId, data) => request(`/files/${fileId}/share-link/${linkId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    getFolder: (folderId) => request(`/folders/${folderId}/manage-access`),
+    updateFolderPermission: (folderId, userId, data) => request(`/folders/${folderId}/permissions/${userId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    updateFolderShareLink: (folderId, linkId, data) => request(`/folders/${folderId}/share-link/${linkId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  },
+
+  // In-App Notifications (Requirements 4, 5, 10)
+  notifications: {
+    list: (unreadOnly = false) => request(`/notifications${unreadOnly ? '?unreadOnly=true' : ''}`),
+    markRead: (id) => request(`/notifications/${id}/read`, { method: 'PATCH' }),
+    markAllRead: () => request('/notifications/read-all', { method: 'POST' }),
   },
 
   // Direct User-to-User Sharing & Permissions

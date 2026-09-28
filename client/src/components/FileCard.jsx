@@ -16,6 +16,8 @@ import {
   FileSpreadsheet,
   Edit2,
   GitBranch,
+  Link as LinkIcon,
+  Users,
 } from 'lucide-react';
 
 export default function FileCard({
@@ -24,6 +26,8 @@ export default function FileCard({
   onPreview,
   onDownload,
   onShare,
+  onGenerateLink,
+  onManageAccess,
   onAudit,
   onViewVersions,
   onDelete,
@@ -317,15 +321,37 @@ export default function FileCard({
               </button>
             )}
 
-            {/* Share (Owner only) */}
+            {/* Owner Actions */}
             {file.isOwner && (
-              <button
-                onClick={() => onShare(file)}
-                title="Share Access & Generate Links"
-                className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-              </button>
+              <>
+                {onGenerateLink && (
+                  <button
+                    onClick={() => onGenerateLink(file)}
+                    title="Generate Secure Share Link"
+                    className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                  >
+                    <LinkIcon className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {onManageAccess && (
+                  <button
+                    onClick={() => onManageAccess(file)}
+                    title="Manage Access & Permissions"
+                    className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                <button
+                  onClick={() => onShare(file)}
+                  title="Share with Users"
+                  className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                </button>
+              </>
             )}
 
             {/* Version History */}

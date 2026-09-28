@@ -233,7 +233,7 @@ export default function FolderShareModal({ folder, isOpen, onClose }) {
         expiresHours: expiresHours ? Number(expiresHours) : null,
       });
 
-      const fullUrl = `${window.location.origin}/#shared-folder-${res.shareLink.token}`;
+      const fullUrl = `${window.location.origin}/#shared/${res.shareLink.token}`;
       setNewlyCreatedLink({
         ...res.shareLink,
         url: fullUrl,
@@ -768,7 +768,7 @@ export default function FolderShareModal({ folder, isOpen, onClose }) {
                 ) : (
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
                     {shareLinks.map((l) => {
-                      const linkUrl = `${window.location.origin}/#shared-folder-${l.token}`;
+                      const linkUrl = `${window.location.origin}/#shared/${l.token}`;
                       return (
                         <div key={l.id} className="p-3 flex items-center justify-between gap-3 text-xs">
                           <div className="truncate flex-1">

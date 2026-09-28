@@ -36,4 +36,47 @@ const uploadLimiter = rateLimit({
   },
 });
 
-module.exports = { apiLimiter, authLimiter, uploadLimiter };
+// Limiter for MFA verification attempts (30 seconds window)
+const mfaLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 10 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many MFA verification attempts. Please wait 30 seconds and try again.',
+  },
+});
+
+// Limiter for access request creation (30 seconds window)
+const accessRequestLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 15 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many access requests sent. Please wait 30 seconds before trying again.',
+  },
+});
+
+// High-capacity limiter for chunked multipart uploads (allowing high-speed concurrent chunk streams)
+const chunkUploadLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 1500 : 10000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Chunk stream rate limit exceeded. Please wait a moment.',
+  },
+});
+
+module.exports = {
+  apiLimiter,
+  authLimiter,
+  uploadLimiter,
+  chunkUploadLimiter,
+  mfaLimiter,
+  accessRequestLimiter,
+};

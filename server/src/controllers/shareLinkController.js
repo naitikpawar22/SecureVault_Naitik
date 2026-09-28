@@ -1,18 +1,51 @@
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const config = require('../config/env');
 const FileShareLink = require('../models/FileShareLink');
+const FolderShareLink = require('../models/FolderShareLink');
 const File = require('../models/File');
+const Folder = require('../models/Folder');
 const FilePermission = require('../models/FilePermission');
+const AccessRequest = require('../models/AccessRequest');
+const User = require('../models/User');
 const storageService = require('../services/storageService');
 const auditService = require('../services/auditService');
 
 /**
+ * Helper to optionally extract authenticated user and MFA verification status from Bearer token
+ */
+const getAuthUserOptional = async (req) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return null;
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, config.jwtSecret);
+    const user = await User.findById(decoded.id);
+    if (!user) return null;
+    return {
+      user,
+      mfaVerified: decoded.mfaVerified === true,
+    };
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Generate a secure shareable link for a file (Owner only)
- * Supports roles: 'viewer' (view only) or 'editor' (can view, download, and update)
  */
 const createShareLink = async (req, res, next) => {
   try {
     const file = req.fileDoc; // Verified by checkFileAccess('owner')
-    const { wrappedFileKey, expiresHours, maxAccessCount, role = 'viewer' } = req.body;
+    const {
+      wrappedFileKey,
+      expiresHours,
+      maxAccessCount,
+      role = 'viewer',
+      allowDownload = true,
+    } = req.body;
 
     const token = crypto.randomBytes(32).toString('hex');
     let expiresAt = null;
@@ -27,6 +60,7 @@ const createShareLink = async (req, res, next) => {
       createdBy: req.user._id,
       wrappedFileKey: wrappedFileKey || file.encryptedFileKey,
       role: role === 'editor' ? 'editor' : 'viewer',
+      allowDownload: Boolean(allowDownload),
       expiresAt,
       maxAccessCount: maxAccessCount ? Number(maxAccessCount) : null,
     });
@@ -40,6 +74,7 @@ const createShareLink = async (req, res, next) => {
         originalName: file.originalName,
         shareType: 'link',
         role: shareLink.role,
+        allowDownload: shareLink.allowDownload,
         tokenId: shareLink._id,
         expiresAt,
       },
@@ -52,6 +87,7 @@ const createShareLink = async (req, res, next) => {
         id: shareLink._id,
         token: shareLink.token,
         role: shareLink.role,
+        allowDownload: shareLink.allowDownload,
         expiresAt: shareLink.expiresAt,
         maxAccessCount: shareLink.maxAccessCount,
         accessCount: shareLink.accessCount,
@@ -69,8 +105,7 @@ const createShareLink = async (req, res, next) => {
 const listShareLinks = async (req, res, next) => {
   try {
     const file = req.fileDoc;
-    const links = await FileShareLink.find({ fileId: file._id, isRevoked: false })
-      .sort({ createdAt: -1 });
+    const links = await FileShareLink.find({ fileId: file._id, isRevoked: false }).sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -78,6 +113,8 @@ const listShareLinks = async (req, res, next) => {
         id: l._id,
         token: l.token,
         role: l.role || 'viewer',
+        allowDownload: l.allowDownload !== false,
+        isDisabled: Boolean(l.isDisabled),
         expiresAt: l.expiresAt,
         maxAccessCount: l.maxAccessCount,
         accessCount: l.accessCount,
@@ -129,51 +166,397 @@ const revokeShareLink = async (req, res, next) => {
 };
 
 /**
- * Access file metadata via share link (Public / Recipient)
+ * Access file or folder via share link (Public / Recipient)
+ * Implements strict workflow from Requirement 1, 2, 3, 5, 6, 9
  */
 const accessShareLink = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    const link = await FileShareLink.findOne({ token, isRevoked: false })
+    // Check FileShareLink first
+    let fileLink = await FileShareLink.findOne({ token, isRevoked: false })
       .populate('fileId')
       .populate('createdBy', 'name email');
 
-    if (!link || !link.fileId || link.fileId.status === 'deleted') {
-      return res.status(404).json({ success: false, error: 'Share link is invalid, expired, or revoked.' });
+    let folderLink = null;
+    let targetType = 'file';
+
+    if (!fileLink || !fileLink.fileId || fileLink.fileId.status === 'deleted') {
+      folderLink = await FolderShareLink.findOne({ token, isRevoked: false })
+        .populate('folderId')
+        .populate('createdBy', 'name email');
+
+      if (!folderLink || !folderLink.folderId || folderLink.folderId.status === 'deleted') {
+        return res.status(404).json({ success: false, error: 'Share link is invalid, expired, or revoked.' });
+      }
+      targetType = 'folder';
+    }
+
+    const activeLink = fileLink || folderLink;
+
+    // Check if disabled by owner
+    if (activeLink.isDisabled) {
+      return res.status(403).json({ success: false, error: 'This share link has been disabled by the owner.' });
     }
 
     // Check expiration
-    if (link.expiresAt && new Date() > link.expiresAt) {
+    if (activeLink.expiresAt && new Date() > activeLink.expiresAt) {
       return res.status(410).json({ success: false, error: 'This share link has expired.' });
     }
 
     // Check max access count
-    if (link.maxAccessCount && link.accessCount >= link.maxAccessCount) {
+    if (activeLink.maxAccessCount && activeLink.accessCount >= activeLink.maxAccessCount) {
       return res.status(403).json({ success: false, error: 'This share link has reached its maximum access limit.' });
     }
 
     // Increment access count
-    link.accessCount += 1;
-    await link.save();
+    activeLink.accessCount += 1;
+    await activeLink.save();
 
-    res.status(200).json({
-      success: true,
-      file: {
-        id: link.fileId._id,
-        originalName: link.fileId.originalName,
-        encryptedSize: link.fileId.encryptedSize,
-        mimeType: link.fileId.mimeType,
-        encryptionAlgorithm: link.fileId.encryptionAlgorithm,
-        iv: link.fileId.iv,
-        wrappedFileKey: link.wrappedFileKey,
-        role: link.role || 'viewer',
-        owner: {
-          name: link.createdBy.name,
-          email: link.createdBy.email,
+    const authContext = await getAuthUserOptional(req);
+
+    // If visitor is NOT logged in: return login/register requirement and basic preview info
+    if (!authContext) {
+      if (targetType === 'file') {
+        return res.status(200).json({
+          success: true,
+          requiresAuth: true,
+          targetType: 'file',
+          link: {
+            token: activeLink.token,
+            targetType: 'file',
+            role: activeLink.role || 'viewer',
+            allowDownload: activeLink.allowDownload !== false,
+            expiresAt: activeLink.expiresAt,
+            name: fileLink.fileId.originalName,
+            owner: {
+              name: fileLink.createdBy.name,
+              email: fileLink.createdBy.email,
+            },
+          },
+          file: {
+            id: fileLink.fileId._id,
+            originalName: fileLink.fileId.originalName,
+            encryptedSize: fileLink.fileId.encryptedSize,
+            mimeType: fileLink.fileId.mimeType,
+            encryptionAlgorithm: fileLink.fileId.encryptionAlgorithm,
+            iv: fileLink.fileId.iv,
+            role: activeLink.role || 'viewer',
+            owner: {
+              name: fileLink.createdBy.name,
+              email: fileLink.createdBy.email,
+            },
+          },
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          requiresAuth: true,
+          targetType: 'folder',
+          link: {
+            token: activeLink.token,
+            targetType: 'folder',
+            role: activeLink.role || 'viewer',
+            allowDownload: activeLink.allowDownload !== false,
+            expiresAt: activeLink.expiresAt,
+            name: folderLink.folderId.name,
+            owner: {
+              name: folderLink.createdBy.name,
+              email: folderLink.createdBy.email,
+            },
+          },
+          folder: {
+            id: folderLink.folderId._id,
+            name: folderLink.folderId.name,
+            color: folderLink.folderId.color,
+            role: activeLink.role || 'viewer',
+            owner: {
+              name: folderLink.createdBy.name,
+              email: folderLink.createdBy.email,
+            },
+          },
+        });
+      }
+    }
+
+    const { user, mfaVerified } = authContext;
+    const isOwner = activeLink.createdBy._id.toString() === user._id.toString();
+
+    // Check MFA requirements if not owner
+    if (!isOwner) {
+      if (!user.mfaEnabled) {
+        return res.status(200).json({
+          success: true,
+          requiresMfaSetup: true,
+          message: 'MFA setup is required before submitting an access request.',
+          targetType,
+          link: {
+            token: activeLink.token,
+            targetType,
+            name: targetType === 'file' ? fileLink.fileId.originalName : folderLink.folderId.name,
+            owner: { name: activeLink.createdBy.name },
+          },
+        });
+      }
+
+      if (!mfaVerified) {
+        return res.status(200).json({
+          success: true,
+          requiresMfaVerify: true,
+          message: 'MFA verification required for this session.',
+          targetType,
+          link: {
+            token: activeLink.token,
+            targetType,
+            name: targetType === 'file' ? fileLink.fileId.originalName : folderLink.folderId.name,
+            owner: { name: activeLink.createdBy.name },
+          },
+        });
+      }
+    }
+
+    // Owner has immediate full access
+    if (isOwner) {
+      if (targetType === 'file') {
+        return res.status(200).json({
+          success: true,
+          isOwner: true,
+          requestStatus: 'approved',
+          targetType: 'file',
+          file: {
+            id: fileLink.fileId._id,
+            originalName: fileLink.fileId.originalName,
+            encryptedSize: fileLink.fileId.encryptedSize,
+            mimeType: fileLink.fileId.mimeType,
+            encryptionAlgorithm: fileLink.fileId.encryptionAlgorithm,
+            iv: fileLink.fileId.iv,
+            wrappedFileKey: fileLink.fileId.encryptedFileKey,
+            role: 'owner',
+            allowDownload: true,
+            currentVersion: fileLink.fileId.currentVersion || 1,
+            owner: {
+              name: fileLink.createdBy.name,
+              email: fileLink.createdBy.email,
+            },
+          },
+        });
+      } else {
+        const [files, subfolders] = await Promise.all([
+          File.find({ folderId: folderLink.folderId._id, status: 'active' }).select(
+            'originalName encryptedSize mimeType iv currentVersion createdAt'
+          ),
+          Folder.find({ parentId: folderLink.folderId._id, status: 'active' }),
+        ]);
+
+        return res.status(200).json({
+          success: true,
+          isOwner: true,
+          requestStatus: 'approved',
+          targetType: 'folder',
+          folder: {
+            id: folderLink.folderId._id,
+            name: folderLink.folderId.name,
+            color: folderLink.folderId.color,
+            role: 'owner',
+            allowDownload: true,
+            owner: {
+              name: folderLink.createdBy.name,
+              email: folderLink.createdBy.email,
+            },
+            files,
+            subfolders,
+          },
+        });
+      }
+    }
+
+    // Visitor is authenticated and MFA-verified. Check AccessRequest status
+    const accessRequest = await AccessRequest.findOne({
+      linkToken: token,
+      requesterId: user._id,
+    }).sort({ createdAt: -1 });
+
+    if (!accessRequest) {
+      return res.status(200).json({
+        success: true,
+        requestStatus: 'none',
+        canRequest: true,
+        targetType,
+        link: {
+          token: activeLink.token,
+          targetType,
+          name: targetType === 'file' ? fileLink.fileId.originalName : folderLink.folderId.name,
+          role: activeLink.role || 'viewer',
+          allowDownload: activeLink.allowDownload !== false,
+          owner: {
+            name: activeLink.createdBy.name,
+            email: activeLink.createdBy.email,
+          },
         },
-      },
-    });
+        file: targetType === 'file'
+          ? {
+              id: fileLink.fileId._id,
+              originalName: fileLink.fileId.originalName,
+              role: activeLink.role || 'viewer',
+              owner: {
+                name: fileLink.createdBy.name,
+                email: fileLink.createdBy.email,
+              },
+            }
+          : null,
+      });
+    }
+
+    if (accessRequest.status === 'pending') {
+      return res.status(200).json({
+        success: true,
+        requestStatus: 'pending',
+        message: 'Your access request has been sent to the owner. You will be notified when the owner responds.',
+        request: accessRequest,
+        targetType,
+        itemName: targetType === 'file' ? fileLink.fileId.originalName : folderLink.folderId.name,
+      });
+    }
+
+    if (accessRequest.status === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        requestStatus: 'rejected',
+        error: 'Your access request was rejected by the owner.',
+        rejectionReason: accessRequest.rejectionReason || '',
+      });
+    }
+
+    if (accessRequest.status === 'revoked') {
+      return res.status(403).json({
+        success: false,
+        requestStatus: 'revoked',
+        error: 'Your access to this item has been revoked.',
+      });
+    }
+
+    // Access request is 'approved'. Verify active permission
+    if (targetType === 'file') {
+      const permission = await FilePermission.findOne({
+        fileId: fileLink.fileId._id,
+        userId: user._id,
+        isRevoked: { $ne: true },
+      });
+
+      if (!permission) {
+        return res.status(403).json({
+          success: false,
+          requestStatus: 'revoked',
+          error: 'Your permission to access this file has been revoked.',
+        });
+      }
+
+      if (permission.expiresAt && new Date() > permission.expiresAt) {
+        return res.status(403).json({
+          success: false,
+          requestStatus: 'expired',
+          error: 'Your access permission has expired.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        requestStatus: 'approved',
+        targetType: 'file',
+        file: {
+          id: fileLink.fileId._id,
+          originalName: fileLink.fileId.originalName,
+          encryptedSize: fileLink.fileId.encryptedSize,
+          mimeType: fileLink.fileId.mimeType,
+          encryptionAlgorithm: fileLink.fileId.encryptionAlgorithm,
+          iv: fileLink.fileId.iv,
+          wrappedFileKey: permission.wrappedFileKey || activeLink.wrappedFileKey,
+          role: permission.role || 'viewer',
+          allowDownload: permission.allowDownload !== false,
+          currentVersion: fileLink.fileId.currentVersion || 1,
+          owner: {
+            name: fileLink.createdBy.name,
+            email: fileLink.createdBy.email,
+          },
+        },
+      });
+    } else {
+      const folder = await Folder.findOne({
+        _id: folderLink.folderId._id,
+        status: 'active',
+        'sharedWith.userId': user._id,
+      });
+
+      if (!folder) {
+        return res.status(403).json({
+          success: false,
+          requestStatus: 'revoked',
+          error: 'Your permission to access this folder has been revoked.',
+        });
+      }
+
+      const sw = folder.sharedWith.find((s) => s.userId.toString() === user._id.toString());
+      if (sw && sw.expiresAt && new Date() > sw.expiresAt) {
+        return res.status(403).json({
+          success: false,
+          requestStatus: 'expired',
+          error: 'Your access to this folder has expired.',
+        });
+      }
+
+      // Fetch files in folder that the recipient has permission to access
+      const descendantIds = await Folder.find({ parentId: folder._id, status: 'active' }).select('_id');
+      const allAccessibleFolderIds = [folder._id, ...descendantIds.map((d) => d._id)];
+
+      const files = await File.find({
+        folderId: { $in: allAccessibleFolderIds },
+        status: 'active',
+      }).select('originalName encryptedSize mimeType iv currentVersion folderId createdAt');
+
+      // Fetch user's wrapped keys for these files
+      const permissions = await FilePermission.find({
+        fileId: { $in: files.map((f) => f._id) },
+        userId: user._id,
+        isRevoked: { $ne: true },
+      });
+      const permMap = new Map(permissions.map((p) => [p.fileId.toString(), p]));
+
+      const filesWithPermissions = files.map((f) => {
+        const p = permMap.get(f._id.toString());
+        return {
+          id: f._id,
+          originalName: f.originalName,
+          encryptedSize: f.encryptedSize,
+          mimeType: f.mimeType,
+          iv: f.iv,
+          currentVersion: f.currentVersion || 1,
+          wrappedFileKey: p?.wrappedFileKey || null,
+          role: p?.role || sw?.role || 'viewer',
+          allowDownload: p ? p.allowDownload !== false : (sw?.allowDownload !== false),
+        };
+      });
+
+      const subfolders = await Folder.find({ parentId: folder._id, status: 'active' });
+
+      return res.status(200).json({
+        success: true,
+        requestStatus: 'approved',
+        targetType: 'folder',
+        folder: {
+          id: folder._id,
+          name: folder.name,
+          color: folder.color,
+          role: sw?.role || 'viewer',
+          allowDownload: sw?.allowDownload !== false,
+          owner: {
+            name: folderLink.createdBy.name,
+            email: folderLink.createdBy.email,
+          },
+          files: filesWithPermissions,
+          subfolders,
+        },
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -186,11 +569,13 @@ const downloadShareLinkFile = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    const link = await FileShareLink.findOne({ token, isRevoked: false })
-      .populate('fileId');
-
+    const link = await FileShareLink.findOne({ token, isRevoked: false }).populate('fileId');
     if (!link || !link.fileId || link.fileId.status === 'deleted') {
       return res.status(404).json({ success: false, error: 'Link invalid, expired, or revoked.' });
+    }
+
+    if (link.isDisabled) {
+      return res.status(403).json({ success: false, error: 'Share link has been disabled by the owner.' });
     }
 
     if (link.expiresAt && new Date() > link.expiresAt) {
@@ -198,13 +583,64 @@ const downloadShareLinkFile = async (req, res, next) => {
     }
 
     const isPreview = req.query.purpose === 'preview';
+    const authContext = await getAuthUserOptional(req);
 
-    // Viewer restriction: Viewers are not allowed to download the file
-    if (link.role === 'viewer' && !isPreview) {
-      return res.status(403).json({
-        success: false,
-        error: 'Downloading is disabled for this document. You have view-only access.',
-      });
+    if (!authContext) {
+      // Unauthenticated visitor: enforce viewer restriction from link
+      if ((link.role === 'viewer' || link.allowDownload === false) && !isPreview) {
+        return res.status(403).json({
+          success: false,
+          error: 'Downloading is disabled for this document. You have view-only access.',
+          code: 'DOWNLOAD_BLOCKED',
+        });
+      }
+    } else {
+      const { user } = authContext;
+      const isOwner = link.createdBy.toString() === user._id.toString();
+
+      if (!isOwner) {
+        // Recipient must have an approved access request
+        const accessRequest = await AccessRequest.findOne({
+          linkToken: token,
+          requesterId: user._id,
+        }).sort({ createdAt: -1 });
+
+        if (!accessRequest || accessRequest.status !== 'approved') {
+          return res.status(403).json({
+            success: false,
+            error: accessRequest
+              ? `Access request is ${accessRequest.status}. File access blocked.`
+              : 'Access request is required and must be approved by the owner.',
+            code: 'ACCESS_REQUEST_REQUIRED',
+          });
+        }
+
+        // Check FilePermission allowDownload
+        const permission = await FilePermission.findOne({
+          fileId: link.fileId._id,
+          userId: user._id,
+          isRevoked: { $ne: true },
+        });
+
+        if (!permission) {
+          return res.status(403).json({
+            success: false,
+            error: 'Your permission to access this file has been revoked.',
+          });
+        }
+
+        if (permission.expiresAt && new Date() > permission.expiresAt) {
+          return res.status(403).json({ success: false, error: 'Access permission has expired.' });
+        }
+
+        if (permission.allowDownload === false && !isPreview) {
+          return res.status(403).json({
+            success: false,
+            error: 'Downloading is disabled for this document. You have view-only access.',
+            code: 'DOWNLOAD_BLOCKED',
+          });
+        }
+      }
     }
 
     const file = link.fileId;
@@ -212,7 +648,7 @@ const downloadShareLinkFile = async (req, res, next) => {
 
     await auditService.log({
       fileId: file._id,
-      actorId: link.createdBy,
+      actorId: authContext?.user?._id || link.createdBy,
       action: isPreview ? 'preview' : 'download',
       ipAddress: req.ip || req.connection.remoteAddress,
       metadata: {
@@ -247,6 +683,10 @@ const updateSharedLinkFile = async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Share link invalid or revoked.' });
     }
 
+    if (link.isDisabled) {
+      return res.status(403).json({ success: false, error: 'Share link has been disabled.' });
+    }
+
     if (link.role !== 'editor') {
       return res.status(403).json({ success: false, error: 'Access denied. This share link only grants View permissions.' });
     }
@@ -258,7 +698,6 @@ const updateSharedLinkFile = async (req, res, next) => {
     const { iv, originalName } = req.body;
     const file = link.fileId;
 
-    // Save updated encrypted payload to S3 and local vault
     await storageService.uploadFile(file.s3ObjectKey, req.file.path, file.mimeType);
     const fs = require('fs');
     fs.unlink(req.file.path, () => {});

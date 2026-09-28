@@ -1,0 +1,190 @@
+Phase 1 — Project setup and GitHub
+Project has separate frontend and backend folders.
+Frontend starts successfully.
+Backend starts successfully without syntax errors.
+MongoDB connects successfully.
+S3 client initializes with the correct bucket and region.
+.env files are excluded from Git.
+No AWS keys, database passwords, or private keys are committed to GitHub.
+README explains installation and running the project.
+
+Test: Start your backend and frontend in separate terminals. Confirm both run without crashing.
+
+Phase 2 — Account and authentication
+User can create an account.
+User can log in and log out.
+Passwords are securely hashed—not stored as plain text.
+Protected APIs require a valid JWT.
+Invalid or expired tokens are rejected.
+A user cannot access another user’s account data by changing an ID in the request.
+
+Test: Log in as User A. Try accessing User B’s private file using User B’s file ID. It should return an authorization error.
+
+Phase 3 — Client-side encryption
+File is encrypted in the browser before upload.
+AES-256 encryption is used.
+A secure random file-encryption key is generated.
+The raw file key is not sent to or stored on the backend.
+The backend stores encrypted file data, not plaintext file contents.
+File decryption happens in the authorized recipient’s browser.
+The original file can be recovered correctly after decryption.
+Private keys are not sent to the backend.
+
+Test: Upload a file, then download and decrypt it. Confirm the recovered file opens correctly. Check that the stored object is encrypted data rather than the original readable file.
+
+Phase 4 — Large file upload and S3
+File upload supports chunking or multipart upload.
+Encrypted chunks are sent to the backend.
+Backend uploads the encrypted chunks to S3.
+Upload progress is displayed.
+Failed or interrupted uploads show a useful error.
+S3 bucket is private.
+Correct S3 bucket name and region are configured.
+Large files can be uploaded and retrieved successfully.
+Performance is tested against the assignment’s target of uploading 1GB in under 5 minutes.
+
+Test: Start with a small file, then test a larger file. Finally, run the 1GB performance test and record the actual duration and your network conditions. Do not claim the target is met until you measure it.
+
+Phase 5 — MongoDB and access control
+MongoDB stores user and file metadata.
+There is a file access-control structure (ACL).
+Owner and Viewer roles are implemented.
+Owner can manage their files.
+Viewer can only perform permitted actions.
+Backend checks permissions on every protected file request.
+Unauthorized users cannot retrieve encrypted chunks.
+Unauthorized users cannot retrieve decryption keys.
+Access revocation blocks future requests.
+Database indexes are added where needed.
+MongoDB sharding is addressed as required by the assignment.
+
+Test: Create a file as User A and share it with User B. Confirm User B can perform only the actions granted by the owner. Test access as User C, who has no permission.
+
+Phase 6 — Secure key sharing
+A secure key-sharing method is implemented.
+AES file keys are not stored raw on the backend.
+ECDH is used for key sharing as intended by the assignment.
+Key derivation and encryption are implemented securely.
+The recipient can decrypt only files they are authorized to access.
+The owner’s private key is never sent to the recipient or backend.
+Sharing a link does not expose the raw file key.
+
+Test: Share a file with User B and confirm they can decrypt it. Then test as User C and confirm they cannot obtain the key or decrypt the file.
+
+Phase 7 — Sharing by email
+Owner can enter a registered recipient’s email.
+The recipient’s account is identified correctly.
+Owner can share with more than one recipient.
+Owner can set each recipient’s permissions individually.
+Owner can allow or block downloads.
+Owner can revoke a recipient’s access.
+Recipient cannot access the file using a different account.
+Backend enforces the permission—not just the UI.
+
+Test: Share a file with Priya’s account. Open the link while logged in as Gauri. Gauri should be denied because she is not the approved recipient.
+
+Phase 8 — Sharing by URL with MFA and approval
+
+This is the additional workflow you asked to implement.
+
+Owner can generate a share link.
+Link token is unique and difficult to guess.
+Opening the link does not automatically grant access.
+Visitor can register or log in.
+Visitor must complete MFA before submitting an access request.
+MFA verification is checked by the backend.
+After MFA, an access request is created.
+Owner receives a notification and sees the request.
+Owner can approve or reject the request.
+Recipient remains blocked while the request is pending.
+Approved access is assigned to the specific recipient account.
+Rejected requests remain blocked.
+Expired or revoked links cannot provide access.
+A different account cannot use the approved recipient’s permission.
+File or folder contents and keys are not exposed before approval.
+
+Test these cases:
+
+Open a link while logged out.
+
+Register a new account.
+
+Complete MFA.
+
+Confirm the request appears for the owner.
+
+Confirm the visitor cannot view the file while pending.
+
+Approve the request as the owner.
+
+Confirm the approved account can access the file.
+
+Open the same link as another account and confirm access is denied.
+
+Reject another request and confirm it remains blocked.
+
+Important: MFA verifies the account. The owner’s approval and ACL permissions determine whether that account can access the file.
+
+Phase 9 — File and folder permissions
+Owner can share a file.
+Owner can share a folder.
+Recipient sees only approved files and folders.
+Nested folders do not expose unrelated files.
+View Only recipients cannot edit.
+Download-blocked recipients cannot download through the API.
+Permissions apply to file previews and versions too.
+Revoked recipients lose future access.
+
+Test: Share one folder with a recipient. Add an unrelated private folder and confirm the recipient cannot access it by changing the URL or file ID.
+
+Phase 10 — Version management
+Updating a file creates a new version.
+Previous versions are retained.
+Version history shows version number.
+Version history shows uploader and date/time.
+Owner can view version history.
+Owner can restore an earlier version, if implemented.
+Recipient’s version access follows their permissions.
+Recipients cannot delete or restore versions unless permitted.
+Versions remain encrypted.
+Version actions are recorded in the audit log.
+
+Test: Upload Version 1, update the file, and confirm Version 2 appears. Check whether the owner can retrieve the earlier version and whether a Viewer has only the allowed actions.
+
+Phase 11 — Audit logs
+Audit logs record file access.
+Audit logs record sharing and permission changes.
+Audit logs record access requests, approvals, rejections, and revocations.
+Audit logs record version creation and restore actions.
+/audit/:fileId endpoint exists.
+Only authorized users can view the relevant audit records.
+Logs do not contain passwords, MFA codes, private keys, or raw AES keys.
+
+Test: Perform a few actions, then open the audit page or endpoint and confirm the correct events appear.
+
+Phase 12 — PDF preview and interface
+React drag-and-drop upload interface works.
+Upload progress and errors are displayed.
+Authorized PDF files can be previewed.
+PDF preview happens after client-side decryption.
+Unauthorized users cannot preview PDFs.
+UI is responsive on mobile and desktop.
+Access-denied and pending-request messages are clear.
+Buttons reflect the user’s actual permissions.
+
+Test: Preview a shared PDF as an approved recipient, then test the same link as an unauthorized account.
+
+Phase 13 — Security and README
+.env is in .gitignore.
+Secrets are not committed to GitHub.
+Backend validates inputs and handles errors safely.
+APIs use authentication and authorization.
+MFA verification has rate limiting.
+Link expiration and revocation are enforced.
+README explains the encryption and key-sharing design.
+README documents access-control decisions.
+README contains a security audit section.
+README records large-file performance test results.
+README explains how to install and run the project.
+
+The assignment also asks you to explain how revocation works. Be clear that revocation can block future access through SecureVault, but cannot erase copies or keys already downloaded by a recipient.

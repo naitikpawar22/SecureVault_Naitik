@@ -19,23 +19,27 @@ import {
   Sparkles,
   Crown,
   Zap,
+  Smartphone,
 } from 'lucide-react';
 import NewMenuButton from './NewMenuButton';
 import ProfileModal from './ProfileModal';
+import MfaModal from './MfaModal';
 
 export default function Sidebar({
   activeTab,
   setActiveTab,
   totalBytes = 0,
   unreadSharedCount = 0,
+  pendingRequestsCount = 0,
   onNewFolder,
   onFileUpload,
   onFolderUpload,
   onUnlockKey,
   onCloseMobile,
 }) {
-  const { user, logout, privateKey } = useAuth();
+  const { user, logout, privateKey, updateUser } = useAuth();
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showMfaModal, setShowMfaModal] = useState(false);
 
   // Storage calculation: out of 100 GB
   const maxStorageBytes = 100 * 1024 * 1024 * 1024; // 100 GB
@@ -45,6 +49,7 @@ export default function Sidebar({
 
   const navItems = [
     { id: 'files', label: 'Home', icon: Home },
+    { id: 'requests', label: 'Access Requests', icon: KeyRound },
     { id: 'shared', label: 'Shared with me', icon: Users },
     { id: 'audit', label: 'Recent Activity', icon: Clock },
     { id: 'starred', label: 'Starred', icon: Star },
@@ -104,6 +109,11 @@ export default function Sidebar({
                 {item.id === 'shared' && unreadSharedCount > 0 && (
                   <span className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-bold bg-red-600 text-white rounded-full leading-none shadow-xs animate-in zoom-in-75 duration-150">
                     {unreadSharedCount}
+                  </span>
+                )}
+                {item.id === 'requests' && pendingRequestsCount > 0 && (
+                  <span className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-bold bg-amber-600 text-white rounded-full leading-none shadow-xs animate-in zoom-in-75 duration-150">
+                    {pendingRequestsCount}
                   </span>
                 )}
               </button>
@@ -234,12 +244,43 @@ export default function Sidebar({
             <LogOut className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Join Google Authenticator Button (Only shown if NOT already added) */}
+        {!user?.mfaEnabled && (
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => setShowMfaModal(true)}
+              className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-semibold hover:bg-amber-100 transition-colors shadow-2xs group"
+              title="Add Google Authenticator 2FA"
+            >
+              <span className="flex items-center gap-1.5">
+                <Smartphone className="w-3.5 h-3.5 text-amber-700" />
+                <span>Join Google Authenticator</span>
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 text-amber-700 group-hover:translate-x-0.5 transition-transform" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Profile Edit Modal */}
       <ProfileModal
         isOpen={showProfileModal}
         onClose={() => setShowProfileModal(false)}
+      />
+
+      {/* Google Authenticator Setup Modal */}
+      <MfaModal
+        isOpen={showMfaModal}
+        onClose={() => setShowMfaModal(false)}
+        mode="setup"
+        title="Join Google Authenticator"
+        description="Scan the QR code in Google Authenticator or enter the setup key manually, then enter the 6-digit verification code."
+        onSuccess={() => {
+          updateUser({ mfaEnabled: true, mfaVerified: true });
+          setShowMfaModal(false);
+        }}
       />
     </aside>
   );

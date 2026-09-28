@@ -130,30 +130,43 @@ class StorageService {
   async uploadPart(objectKey, uploadId, partNumber, partBuffer) {
     let etag = `local-etag-part-${partNumber}`;
 
-    // 1. Upload part directly to S3 if active
+    const tasks = [];
+
+    // 1. Stream part directly to Amazon S3 bucket if active
     if (s3Client && config.aws.bucket && !uploadId.startsWith('mp-local-')) {
-      try {
-        const command = new UploadPartCommand({
-          Bucket: config.aws.bucket,
-          Key: objectKey,
-          UploadId: uploadId,
-          PartNumber: partNumber,
-          Body: partBuffer,
-        });
-        const res = await s3Client.send(command);
-        etag = res.ETag ? res.ETag.replace(/"/g, '') : etag;
-      } catch (err) {
-        console.warn(`[Storage S3 Multipart Part Warning] Part ${partNumber} upload to S3 failed: ${err.message}`);
-      }
+      const s3Task = (async () => {
+        try {
+          const command = new UploadPartCommand({
+            Bucket: config.aws.bucket,
+            Key: objectKey,
+            UploadId: uploadId,
+            PartNumber: partNumber,
+            Body: partBuffer,
+          });
+          const res = await s3Client.send(command);
+          if (res.ETag) {
+            etag = res.ETag.replace(/"/g, '');
+          }
+        } catch (err) {
+          console.warn(`[Storage S3 Multipart Part Warning] Part ${partNumber} upload to S3 failed: ${err.message}`);
+        }
+      })();
+      tasks.push(s3Task);
     }
 
-    // 2. Also save part in local temp session directory for local assembly
+    // 2. Concurrently save part in local temp session directory for local vault assembly
     const sessionDirName = uploadId.startsWith('mp-') ? uploadId : `mp-${uploadId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const sessionDir = path.join(localTempDir, sessionDirName);
     if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-    
-    const partPath = path.join(sessionDir, `part-${String(partNumber).padStart(5, '0')}.bin`);
-    await fs.promises.writeFile(partPath, partBuffer);
+
+    const localTask = (async () => {
+      const partPath = path.join(sessionDir, `part-${String(partNumber).padStart(5, '0')}.bin`);
+      await fs.promises.writeFile(partPath, partBuffer);
+    })();
+    tasks.push(localTask);
+
+    // Run both S3 stream and local save in parallel for highest throughput
+    await Promise.all(tasks);
 
     return {
       partNumber,
@@ -196,7 +209,7 @@ class StorageService {
       }
     }
 
-    // 2. Assemble local file in vault from local parts
+    // 2. Stream-assemble local file in vault from local parts with backpressure
     const sessionDirName = uploadId.startsWith('mp-') ? uploadId : `mp-${uploadId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const sessionDir = path.join(localTempDir, sessionDirName);
     const targetVaultPath = path.join(localUploadsDir, objectKey);
@@ -206,12 +219,29 @@ class StorageService {
         .filter((f) => f.startsWith('part-'))
         .sort();
 
-      const writeStream = fs.createWriteStream(targetVaultPath);
-      for (const file of partFiles) {
-        const partData = await fs.promises.readFile(path.join(sessionDir, file));
-        writeStream.write(partData);
-      }
-      writeStream.end();
+      await new Promise((resolve, reject) => {
+        const writeStream = fs.createWriteStream(targetVaultPath);
+        writeStream.on('error', reject);
+        writeStream.on('finish', resolve);
+
+        (async () => {
+          try {
+            for (const file of partFiles) {
+              const partPath = path.join(sessionDir, file);
+              const readStream = fs.createReadStream(partPath);
+              await new Promise((resPipe, rejPipe) => {
+                readStream.pipe(writeStream, { end: false });
+                readStream.on('end', resPipe);
+                readStream.on('error', rejPipe);
+              });
+            }
+            writeStream.end();
+          } catch (e) {
+            writeStream.destroy(e);
+            reject(e);
+          }
+        })();
+      });
 
       // Clean up session directory
       fs.rm(sessionDir, { recursive: true, force: true }, () => {});

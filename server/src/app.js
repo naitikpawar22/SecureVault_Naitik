@@ -13,6 +13,8 @@ const auditRoutes = require('./routes/auditRoutes');
 const userRoutes = require('./routes/userRoutes');
 const sharedLinkRoutes = require('./routes/sharedLinkRoutes');
 const folderRoutes = require('./routes/folderRoutes');
+const accessRequestRoutes = require('./routes/accessRequestRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 
@@ -96,6 +98,8 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/shared', sharedLinkRoutes);
 app.use('/api/folders', folderRoutes);
+app.use('/api/access-requests', accessRequestRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Handle 404 routes
 app.use('*', (req, res) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useUpload } from '../context/UploadContext';
 import { api } from '../services/api';
-import { uploadEncryptedFile } from '../services/uploadService';
 import FileList from '../components/FileList';
 import {
   Search,
@@ -18,6 +18,7 @@ export default function DashboardPage({
   onUpdateTotalBytes,
 }) {
   const { user } = useAuth();
+  const { activeUploads, uploadFiles, uploadFolder, dismissUpload } = useUpload();
   const [ownedFiles, setOwnedFiles] = useState([]);
   const [sharedFiles, setSharedFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -30,11 +31,6 @@ export default function DashboardPage({
   const [success, setSuccess] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Ongoing upload status bar
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('');
-
   useEffect(() => {
     // Reset folder view when switching between personal and shared tab
     setCurrentFolderId(null);
@@ -44,6 +40,32 @@ export default function DashboardPage({
   useEffect(() => {
     loadAll(currentFolderId);
   }, [currentFolderId, activeTab]);
+
+  // Global listeners for upload and folder creation triggered anywhere in app
+  useEffect(() => {
+    const handleTriggerFiles = (e) => {
+      if (e.detail) handleFileUpload(e.detail);
+    };
+    const handleTriggerFolder = (e) => {
+      if (e.detail) handleFolderUpload(e.detail);
+    };
+    const handleTriggerNewFolder = () => {
+      const folderName = window.prompt('Enter new folder name:');
+      if (folderName && folderName.trim()) {
+        handleNewFolder(folderName.trim());
+      }
+    };
+
+    window.addEventListener('vault:upload-files', handleTriggerFiles);
+    window.addEventListener('vault:upload-folder', handleTriggerFolder);
+    window.addEventListener('vault:new-folder', handleTriggerNewFolder);
+
+    return () => {
+      window.removeEventListener('vault:upload-files', handleTriggerFiles);
+      window.removeEventListener('vault:upload-folder', handleTriggerFolder);
+      window.removeEventListener('vault:new-folder', handleTriggerNewFolder);
+    };
+  }, [currentFolderId, user]);
 
   const loadAll = async (folderId = currentFolderId) => {
     setLoading(true);
@@ -148,84 +170,31 @@ export default function DashboardPage({
   };
 
   /**
-   * File Upload handler (triggered by + New button)
+   * File Upload handler (calls persistent global upload manager)
    */
-  const handleFileUpload = async (fileList) => {
+  const handleFileUpload = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-    setUploading(true);
-    setUploadProgress(5);
-    setError('');
-    setSuccess('');
-
-    try {
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        setUploadStatus(`Encrypting and uploading "${file.name}" (${i + 1}/${fileList.length})...`);
-        await uploadEncryptedFile({
-          file,
-          user,
-          folderId: currentFolderId,
-          onProgress: (p) => setUploadProgress(p),
-          onStatus: (s) => setUploadStatus(s),
-        });
-      }
-      setSuccess(`Successfully encrypted and uploaded ${fileList.length} ${fileList.length === 1 ? 'file' : 'files'} to vault.`);
-      loadAll(currentFolderId);
-    } catch (err) {
-      console.error('File upload failed:', err);
-      setError(err.message || 'Upload failed');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadStatus('');
-    }
+    uploadFiles(fileList, currentFolderId, () => loadAll(currentFolderId));
   };
 
   /**
-   * Folder Upload handler (with webkitdirectory)
+   * Folder Upload handler (calls persistent global upload manager)
    */
-  const handleFolderUpload = async (fileList) => {
+  const handleFolderUpload = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-    setUploading(true);
-    setUploadProgress(5);
-    setError('');
-    setSuccess('');
-
-    try {
-      // Find top folder name from webkitRelativePath
-      const firstPath = fileList[0].webkitRelativePath || '';
-      const folderName = firstPath.split('/')[0] || 'Uploaded Folder';
-
-      setUploadStatus(`Creating folder "${folderName}" in S3 Vault...`);
-      const newFolderRes = await api.folders.create({
-        name: folderName,
-        parentId: currentFolderId,
-      });
-      const newFolderId = newFolderRes.folder.id;
-
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        setUploadStatus(`Encrypting "${file.name}" in folder "${folderName}" (${i + 1}/${fileList.length})...`);
-        await uploadEncryptedFile({
-          file,
-          user,
-          folderId: newFolderId,
-          onProgress: (p) => setUploadProgress(p),
-          onStatus: (s) => setUploadStatus(s),
-        });
-      }
-
-      setSuccess(`Folder "${folderName}" with ${fileList.length} files encrypted & uploaded successfully!`);
-      loadAll(currentFolderId);
-    } catch (err) {
-      console.error('Folder upload failed:', err);
-      setError(err.message || 'Folder upload failed');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadStatus('');
-    }
+    uploadFolder(fileList, currentFolderId, () => loadAll(currentFolderId));
   };
+
+  // Auto-refresh vault contents when any background upload finishes
+  useEffect(() => {
+    const handleUploaded = (e) => {
+      if (!e.detail?.folderId || e.detail.folderId === currentFolderId) {
+        loadAll(currentFolderId);
+      }
+    };
+    window.addEventListener('vault:item-uploaded', handleUploaded);
+    return () => window.removeEventListener('vault:item-uploaded', handleUploaded);
+  }, [currentFolderId]);
 
   // Filter based on search query
   const displayedOwned = ownedFiles.filter((f) =>
@@ -240,24 +209,6 @@ export default function DashboardPage({
 
   return (
     <div className="space-y-4">
-      {/* Upload Progress Notification */}
-      {uploading && (
-        <div className="p-4 bg-white border border-blue-200 rounded-xl shadow-md space-y-2 animate-in fade-in duration-150">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 text-[#1e40af] font-semibold">
-              <UploadCloud className="w-4 h-4 animate-bounce" />
-              <span>{uploadStatus || 'Encrypting & uploading...'}</span>
-            </div>
-            <span className="font-mono text-slate-700 font-bold">{uploadProgress}%</span>
-          </div>
-          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-[#1e40af] h-2 rounded-full transition-all duration-300"
-              style={{ width: `${uploadProgress}%` }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Alert Notices */}
       {error && (
@@ -288,6 +239,8 @@ export default function DashboardPage({
           currentFolderId={currentFolderId}
           currentFolderName={currentFolderName}
           isSharedView={false}
+          activeUploads={activeUploads.filter((u) => u.folderId === currentFolderId || (!u.folderId && !currentFolderId))}
+          onDismissUpload={dismissUpload}
           onRefresh={() => loadAll(currentFolderId)}
           onOpenFolder={handleOpenFolder}
           onNavigateBreadcrumb={handleNavigateBreadcrumb}
@@ -305,6 +258,8 @@ export default function DashboardPage({
           currentFolderId={currentFolderId}
           currentFolderName={currentFolderName}
           isSharedView={true}
+          activeUploads={activeUploads.filter((u) => u.folderId === currentFolderId || (!u.folderId && !currentFolderId))}
+          onDismissUpload={dismissUpload}
           onRefresh={() => loadAll(currentFolderId)}
           onOpenFolder={handleOpenFolder}
           onNavigateBreadcrumb={handleNavigateBreadcrumb}

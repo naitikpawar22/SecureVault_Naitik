@@ -29,6 +29,18 @@ const filePermissionSchema = new mongoose.Schema(
       ref: 'User',
       required: [true, 'Granter user ID is required'],
     },
+    allowDownload: {
+      type: Boolean,
+      default: true,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    isRevoked: {
+      type: Boolean,
+      default: false,
+    },
     createdAt: {
       type: Date,
       default: Date.now,

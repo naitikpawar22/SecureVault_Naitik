@@ -50,6 +50,14 @@ const folderSchema = new mongoose.Schema(
           type: mongoose.Schema.Types.ObjectId,
           ref: 'User',
         },
+        allowDownload: {
+          type: Boolean,
+          default: true,
+        },
+        expiresAt: {
+          type: Date,
+          default: null,
+        },
         createdAt: {
           type: Date,
           default: Date.now,

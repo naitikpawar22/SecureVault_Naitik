@@ -51,9 +51,9 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   /**
-   * User Registration with Zero-Knowledge Keypair Generation
+   * Step 1 of User Registration: Generates browser keypair, registers account, and returns session for MFA setup
    */
-  const register = async (name, email, password) => {
+  const prepareRegistration = async (name, email, password) => {
     // 1. Generate ECDH Keypair in browser
     const keyPair = await generateUserKeyPair();
     const publicJwk = await exportPublicKey(keyPair.publicKey);
@@ -62,7 +62,7 @@ export const AuthProvider = ({ children }) => {
     // 2. Encrypt private key client-side using password KEK
     const encryptedPrivateKeyBundle = await encryptPrivateKeyWithPassword(privateJwk, password);
 
-    // 3. Register user with server (server receives public key and encrypted private bundle only)
+    // 3. Register user with server
     const response = await api.auth.register({
       name,
       email,
@@ -71,12 +71,35 @@ export const AuthProvider = ({ children }) => {
       encryptedPrivateKey: encryptedPrivateKeyBundle,
     });
 
-    // 4. Save session state
+    // 4. Temporarily save token so subsequent setupMfa call is authorized
     localStorage.setItem('securevault_token', response.accessToken);
-    localStorage.setItem('securevault_user', JSON.stringify(response.user));
     sessionStorage.setItem('securevault_session_privkey', JSON.stringify(privateJwk));
     localStorage.setItem('securevault_privkey_cache', JSON.stringify(privateJwk));
 
+    return {
+      response,
+      keyPair,
+      privateJwk,
+    };
+  };
+
+  /**
+   * Complete registration session (called after MFA setup or if skipped)
+   */
+  const completeRegistration = (responseUser, token, cryptoKey) => {
+    if (token) localStorage.setItem('securevault_token', token);
+    localStorage.setItem('securevault_user', JSON.stringify(responseUser));
+    setUser(responseUser);
+    if (cryptoKey) setPrivateKey(cryptoKey);
+  };
+
+  /**
+   * User Registration with Zero-Knowledge Keypair Generation (direct)
+   */
+  const register = async (name, email, password) => {
+    const { response, keyPair, privateJwk } = await prepareRegistration(name, email, password);
+
+    localStorage.setItem('securevault_user', JSON.stringify(response.user));
     setUser(response.user);
     setPrivateKey(keyPair.privateKey);
 
@@ -90,7 +113,6 @@ export const AuthProvider = ({ children }) => {
     const response = await api.auth.login({ email, password });
 
     localStorage.setItem('securevault_token', response.accessToken);
-    localStorage.setItem('securevault_user', JSON.stringify(response.user));
 
     // Decrypt the user's private key in the browser using their password
     if (response.user.encryptedPrivateKey) {
@@ -109,7 +131,12 @@ export const AuthProvider = ({ children }) => {
       }
     }
 
-    setUser(response.user);
+    // If MFA is required and not verified yet, do not set user in state so LoginPage remains on MFA screen
+    if (!response.mfaRequired || response.mfaVerified) {
+      localStorage.setItem('securevault_user', JSON.stringify(response.user));
+      setUser(response.user);
+    }
+
     return response;
   };
 
@@ -170,15 +197,27 @@ export const AuthProvider = ({ children }) => {
     });
   };
 
+  const setSessionAuth = (token, updatedUser) => {
+    if (token) localStorage.setItem('securevault_token', token);
+    if (updatedUser) {
+      localStorage.setItem('securevault_user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
         user,
         updateUser,
+        setSessionAuth,
         privateKey,
-        isAuthenticated: !!user,
+        setPrivateKey,
+        isAuthenticated: Boolean(user && user.id && (!user.mfaEnabled || user.mfaVerified !== false)),
         loading,
         register,
+        prepareRegistration,
+        completeRegistration,
         login,
         unlockPrivateKey,
         logout,

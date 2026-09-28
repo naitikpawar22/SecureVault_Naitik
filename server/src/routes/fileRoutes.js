@@ -3,9 +3,10 @@ const router = express.Router();
 const fileController = require('../controllers/fileController');
 const multipartController = require('../controllers/multipartController');
 const shareLinkController = require('../controllers/shareLinkController');
+const manageAccessController = require('../controllers/manageAccessController');
 const authenticate = require('../middleware/auth');
 const { checkFileAccess } = require('../middleware/rbac');
-const { uploadLimiter } = require('../middleware/rateLimiter');
+const { uploadLimiter, chunkUploadLimiter } = require('../middleware/rateLimiter');
 const upload = require('../middleware/upload');
 const { validateUpload } = require('../validators/fileValidator');
 
@@ -16,7 +17,7 @@ router.use(authenticate);
 router.post('/multipart/initiate', uploadLimiter, multipartController.initiate);
 router.post(
   '/multipart/chunk',
-  uploadLimiter,
+  chunkUploadLimiter,
   upload.single('chunk'),
   multipartController.uploadPart
 );
@@ -43,7 +44,13 @@ router.delete('/:id', checkFileAccess('owner'), fileController.deleteFile);
 router.post('/:id/share-link', checkFileAccess('owner'), shareLinkController.createShareLink);
 router.get('/:id/share-links', checkFileAccess('owner'), shareLinkController.listShareLinks);
 router.delete('/:id/share-link/:linkId', checkFileAccess('owner'), shareLinkController.revokeShareLink);
+router.patch('/:id/share-link/:linkId', checkFileAccess('owner'), manageAccessController.updateFileShareLink);
 router.post('/:id/rotate-key', checkFileAccess('owner'), upload.single('reEncryptedFile'), shareLinkController.rotateKey);
+
+// === File Access Management (Owner only - Requirement 8) ===
+router.get('/:id/manage-access', checkFileAccess('owner'), manageAccessController.getFileAccessManagement);
+router.patch('/:id/permissions/:userId', checkFileAccess('owner'), manageAccessController.updateFileRecipientPermission);
+router.delete('/:id/permissions/:userId', checkFileAccess('owner'), manageAccessController.revokeFileRecipient);
 
 // === File Version Management (Editor & Viewer Access) ===
 router.get('/:id/versions', checkFileAccess('viewer'), fileController.listVersions);

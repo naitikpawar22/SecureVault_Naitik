@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const folderController = require('../controllers/folderController');
+const manageAccessController = require('../controllers/manageAccessController');
 const authenticate = require('../middleware/auth');
 
 // All folder routes require authentication
@@ -21,5 +22,10 @@ router.get('/:id/audit', folderController.getFolderAuditLogs);
 router.post('/:id/share-link', folderController.createFolderShareLink);
 router.get('/:id/share-links', folderController.listFolderShareLinks);
 router.delete('/:id/share-link/:linkId', folderController.revokeFolderShareLink);
+
+// Folder Manage Access (Requirement 8)
+router.get('/:id/manage-access', manageAccessController.getFolderAccessManagement);
+router.patch('/:id/permissions/:userId', manageAccessController.updateFolderRecipientPermission);
+router.patch('/:id/share-link/:linkId', manageAccessController.updateFolderShareLink);
 
 module.exports = router;

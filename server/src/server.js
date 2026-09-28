@@ -10,7 +10,7 @@ const startServer = async () => {
     await connectDB();
 
     // 2. Start HTTP server
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`====================================================`);
       console.log(`  SecureVault API Server running on port ${PORT}`);
       console.log(`  Environment: ${config.nodeEnv}`);

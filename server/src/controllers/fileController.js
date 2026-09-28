@@ -244,6 +244,7 @@ const getFile = async (req, res, next) => {
         wrappedFileKey: req.wrappedFileKey,
         role: req.userRole,
         isOwner: req.userRole === 'owner',
+        allowDownload: req.userRole === 'owner' ? true : (req.permissionDoc ? req.permissionDoc.allowDownload !== false : true),
         currentVersion: file.currentVersion || 1,
         owner: {
           id: file.ownerId._id,
@@ -263,7 +264,18 @@ const downloadFile = async (req, res, next) => {
     const file = req.fileDoc; // Attached by checkFileAccess middleware
     const { purpose } = req.query;
 
-    const action = (purpose === 'preview' || req.userRole === 'viewer') ? 'preview' : 'download';
+    if (req.userRole !== 'owner') {
+      const allowDownload = req.permissionDoc ? req.permissionDoc.allowDownload !== false : true;
+      if (!allowDownload && purpose !== 'preview') {
+        return res.status(403).json({
+          success: false,
+          error: 'Downloading is disabled for this file. You have view-only access.',
+          code: 'DOWNLOAD_BLOCKED',
+        });
+      }
+    }
+
+    const action = purpose === 'preview' ? 'preview' : 'download';
     const actionDetail = action === 'preview'
       ? `Previewed encrypted content (v${file.currentVersion || 1})`
       : `Downloaded file payload (v${file.currentVersion || 1})`;
@@ -564,11 +576,15 @@ const downloadVersion = async (req, res, next) => {
     const { versionNumber } = req.params;
     const { purpose } = req.query;
 
-    if (req.userRole === 'viewer' && purpose !== 'preview') {
-      return res.status(403).json({
-        success: false,
-        error: 'Viewers cannot download file payloads directly. Only preview is allowed.',
-      });
+    if (req.userRole !== 'owner') {
+      const allowDownload = req.permissionDoc ? req.permissionDoc.allowDownload !== false : true;
+      if (!allowDownload && purpose !== 'preview') {
+        return res.status(403).json({
+          success: false,
+          error: 'Downloading is disabled for this file version. You have view-only access.',
+          code: 'DOWNLOAD_BLOCKED',
+        });
+      }
     }
 
     const versionDoc = await FileVersion.findOne({

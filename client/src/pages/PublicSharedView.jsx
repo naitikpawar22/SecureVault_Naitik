@@ -5,6 +5,7 @@ import {
   decryptFile,
   encryptFile,
   importFileKeyFromBase64,
+  unwrapFileKey,
 } from '../utils/crypto';
 import {
   Shield,
@@ -20,25 +21,57 @@ import {
   Save,
   X,
   ShieldAlert,
+  ShieldCheck,
   LogOut,
   Folder as FolderIcon,
+  Clock,
+  History,
+  Send,
+  KeyRound,
+  RefreshCw,
+  FolderOpen,
 } from 'lucide-react';
 import AuthModal from '../components/AuthModal';
+import MfaModal from '../components/MfaModal';
+import VersionHistoryModal from '../components/VersionHistoryModal';
 import FileCard from '../components/FileCard';
-import NewMenuButton from '../components/NewMenuButton';
 
 export default function PublicSharedView({ token, keyParam, onGoHome }) {
-  const { user, isAuthenticated, logout } = useAuth();
-  const [file, setFile] = useState(null);
+  const { user, isAuthenticated, privateKey, unlockPrivateKey, logout, setSessionAuth } = useAuth();
+
   const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [decryptionKey, setDecryptionKey] = useState(keyParam || '');
+  const [linkData, setLinkData] = useState(null);
+  const [file, setFile] = useState(null);
+  const [folder, setFolder] = useState(null);
+  const [targetType, setTargetType] = useState('file');
 
-  // Auth Modal state (triggered when secondary user taps + New)
+  // Recipient access flow states
+  const [accessState, setAccessState] = useState('checking'); // 'unauth' | 'mfa_setup' | 'mfa_verify' | 'can_request' | 'pending' | 'rejected' | 'revoked' | 'expired' | 'approved'
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [pendingRequest, setPendingRequest] = useState(null);
+
+  // Request Access form state
+  const [requestedRole, setRequestedRole] = useState('viewer');
+  const [requestMessage, setRequestMessage] = useState('');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+
+  // Decryption state
+  const [decryptionKey, setDecryptionKey] = useState(keyParam || '');
+  const [cryptoKey, setCryptoKey] = useState(null);
+  const [keyUnlocking, setKeyUnlocking] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [showUnlockPrompt, setShowUnlockPrompt] = useState(false);
+  const [unlockError, setUnlockError] = useState('');
+
+  // Modals state
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalMode, setAuthModalMode] = useState('login');
+  const [showMfaModal, setShowMfaModal] = useState(false);
+  const [mfaModalMode, setMfaModalMode] = useState('verify');
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [activeVersionFile, setActiveVersionFile] = useState(null);
 
   // Preview Modal state
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -46,6 +79,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewText, setPreviewText] = useState(null);
   const [previewType, setPreviewType] = useState('unknown');
+  const [downloading, setDownloading] = useState(false);
 
   // Anti-Screenshot & Screen Capture Defense
   const [isScreenCaptureBlocked, setIsScreenCaptureBlocked] = useState(false);
@@ -57,8 +91,8 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
   const [savingEditorText, setSavingEditorText] = useState(false);
 
   useEffect(() => {
-    loadSharedFile();
-  }, [token]);
+    loadSharedAccess();
+  }, [token, isAuthenticated, user?.mfaEnabled, user?.mfaVerified]);
 
   useEffect(() => {
     if (keyParam) {
@@ -72,14 +106,16 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
 
   // Screen capture & screenshot prevention for view-only users
   useEffect(() => {
-    const isViewer = file?.role === 'viewer';
+    const isViewer = file?.role === 'viewer' || folder?.role === 'viewer';
     if (!isViewer) return;
 
     const handleKeyDown = (e) => {
       if (
         e.key === 'PrintScreen' ||
         e.code === 'PrintScreen' ||
-        ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 's' || e.key === 'S' || e.key === '4' || e.key === '3'))
+        ((e.metaKey || e.ctrlKey) &&
+          e.shiftKey &&
+          (e.key === 's' || e.key === 'S' || e.key === '4' || e.key === '3'))
       ) {
         e.preventDefault();
         setIsScreenCaptureBlocked(true);
@@ -108,33 +144,177 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [file?.role]);
+  }, [file?.role, folder?.role]);
 
-  const loadSharedFile = async () => {
+  const loadSharedAccess = async () => {
     setLoading(true);
     setError('');
     try {
       const res = await api.shared.getLinkFile(token);
-      setFile(res.file);
+
+      setTargetType(res.targetType || 'file');
+      setLinkData(res.link || null);
+
+      if (res.requiresAuth) {
+        setAccessState('unauth');
+        setFile(res.file || null);
+        setFolder(res.folder || null);
+        return;
+      }
+
+      if (res.requiresMfaSetup) {
+        setAccessState('mfa_setup');
+        return;
+      }
+
+      if (res.requiresMfaVerify) {
+        setAccessState('mfa_verify');
+        return;
+      }
+
+      if (res.requestStatus === 'none' || res.canRequest) {
+        setAccessState('can_request');
+        return;
+      }
+
+      if (res.requestStatus === 'pending') {
+        setAccessState('pending');
+        setPendingRequest(res.request || null);
+        return;
+      }
+
+      if (res.requestStatus === 'approved') {
+        setAccessState('approved');
+        if (res.targetType === 'folder') {
+          setFolder(res.folder);
+        } else {
+          setFile(res.file);
+        }
+        return;
+      }
     } catch (err) {
-      setError(err.message || 'Unable to access shared file. Link may be expired or revoked.');
+      if (err.status === 403) {
+        if (err.data?.requestStatus === 'rejected') {
+          setAccessState('rejected');
+          setRejectionReason(err.data?.rejectionReason || '');
+          return;
+        }
+        if (err.data?.requestStatus === 'revoked') {
+          setAccessState('revoked');
+          return;
+        }
+        if (err.data?.requestStatus === 'expired') {
+          setAccessState('expired');
+          return;
+        }
+      }
+      if (err.status === 410) {
+        setAccessState('expired');
+        setError('This share link has expired.');
+        return;
+      }
+      setError(err.message || 'Unable to access shared item. Link may be invalid, disabled, or revoked.');
     } finally {
       setLoading(false);
     }
   };
 
-  const getCryptoKey = async () => {
-    if (!decryptionKey) {
-      throw new Error('A valid AES-256 decryption key is required.');
+  /**
+   * Submit Access Request (Requirement 3)
+   */
+  const handleSendAccessRequest = async (e) => {
+    e.preventDefault();
+    setSubmittingRequest(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await api.accessRequests.create({
+        token,
+        requestedRole,
+        message: requestMessage,
+      });
+
+      if (res.alreadyApproved) {
+        setSuccess('Access already approved! Loading file...');
+        loadSharedAccess();
+      } else {
+        setAccessState('pending');
+        setPendingRequest(res.request);
+        setSuccess('Your access request has been sent to the owner.');
+      }
+    } catch (err) {
+      if (err.data?.code === 'MFA_SETUP_REQUIRED') {
+        setAccessState('mfa_setup');
+      } else if (err.data?.code === 'MFA_VERIFICATION_REQUIRED') {
+        setAccessState('mfa_verify');
+      } else if (err.data?.request) {
+        setAccessState('pending');
+        setPendingRequest(err.data.request);
+      } else {
+        setError(err.message || 'Failed to submit access request.');
+      }
+    } finally {
+      setSubmittingRequest(false);
     }
-    return await importFileKeyFromBase64(decryptionKey);
   };
 
   /**
-   * Decrypt and Download (Blocked if role === 'viewer')
+   * Resolve FEK via URL fragment or privateKey unwrap
    */
-  const handleDownload = async () => {
-    if (file?.role === 'viewer') {
+  const resolveCryptoKey = async (targetFile) => {
+    const fileObj = targetFile || file;
+    if (cryptoKey) return cryptoKey;
+
+    if (decryptionKey) {
+      const k = await importFileKeyFromBase64(decryptionKey);
+      setCryptoKey(k);
+      return k;
+    }
+
+    if (fileObj?.wrappedFileKey) {
+      if (!privateKey) {
+        setShowUnlockPrompt(true);
+        throw new Error('Your cryptographic private key is locked. Please unlock it to decrypt this file.');
+      }
+      try {
+        const unwrapped = await unwrapFileKey(fileObj.wrappedFileKey, privateKey);
+        setCryptoKey(unwrapped);
+        return unwrapped;
+      } catch (err) {
+        console.error('Failed to unwrap file key:', err);
+        throw new Error('Could not decrypt file key with your private key.');
+      }
+    }
+
+    throw new Error('No valid decryption key available for this document.');
+  };
+
+  /**
+   * Unlock private key with password
+   */
+  const handleUnlockKey = async (e) => {
+    e.preventDefault();
+    setKeyUnlocking(true);
+    setUnlockError('');
+    try {
+      await unlockPrivateKey(unlockPassword);
+      setShowUnlockPrompt(false);
+      setUnlockPassword('');
+      setSuccess('Cryptographic private key unlocked successfully!');
+    } catch (err) {
+      setUnlockError(err.message || 'Failed to unlock private key.');
+    } finally {
+      setKeyUnlocking(false);
+    }
+  };
+
+  /**
+   * Download and Decrypt File (Blocked if allowDownload === false)
+   */
+  const handleDownload = async (targetFile) => {
+    const fileObj = targetFile || file;
+    if (fileObj?.allowDownload === false) {
       setError('Downloading is disabled for this document. You have view-only access.');
       return;
     }
@@ -144,25 +324,25 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
     setSuccess('');
 
     try {
-      const fek = await getCryptoKey();
+      const fek = await resolveCryptoKey(fileObj);
       const { blob } = await api.shared.downloadLinkFile(token);
       const encryptedBuffer = await blob.arrayBuffer();
-      const decryptedBuffer = await decryptFile(encryptedBuffer, fek, file.iv);
+      const decryptedBuffer = await decryptFile(encryptedBuffer, fek, fileObj.iv);
 
       const decryptedBlob = new Blob([decryptedBuffer], {
-        type: file.mimeType || 'application/octet-stream',
+        type: fileObj.mimeType || 'application/octet-stream',
       });
       const url = URL.createObjectURL(decryptedBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = file.originalName;
+      a.download = fileObj.originalName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Decryption download error:', err);
-      setError(`Decryption failed: ${err.message}.`);
+      setError(`Download failed: ${err.message}`);
     } finally {
       setDownloading(false);
     }
@@ -171,21 +351,21 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
   /**
    * In-Browser Decrypted Preview
    */
-  const handlePreview = async () => {
+  const handlePreview = async (targetFile) => {
+    const fileObj = targetFile || file;
     setPreviewOpen(true);
     setPreviewLoading(true);
     setError('');
     setIsScreenCaptureBlocked(false);
 
     try {
-      const fek = await getCryptoKey();
-      // Pass purpose=preview so server allows in-memory decryption for viewers
+      const fek = await resolveCryptoKey(fileObj);
       const { blob } = await api.shared.downloadLinkFile(token, 'preview');
       const encryptedBuffer = await blob.arrayBuffer();
-      const decryptedBuffer = await decryptFile(encryptedBuffer, fek, file.iv);
+      const decryptedBuffer = await decryptFile(encryptedBuffer, fek, fileObj.iv);
 
-      const mime = (file.mimeType || '').toLowerCase();
-      const name = (file.originalName || '').toLowerCase();
+      const mime = (fileObj.mimeType || '').toLowerCase();
+      const name = (fileObj.originalName || '').toLowerCase();
 
       if (mime.includes('pdf') || name.endsWith('.pdf')) {
         const decryptedBlob = new Blob([decryptedBuffer], { type: 'application/pdf' });
@@ -227,7 +407,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
     setError('');
 
     try {
-      const fek = await getCryptoKey();
+      const fek = await resolveCryptoKey(file);
       const { blob } = await api.shared.downloadLinkFile(token, 'preview');
       const encryptedBuffer = await blob.arrayBuffer();
       const decryptedBuffer = await decryptFile(encryptedBuffer, fek, file.iv);
@@ -250,7 +430,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
     setSuccess('');
 
     try {
-      const fek = await getCryptoKey();
+      const fek = await resolveCryptoKey(file);
       const enc = new TextEncoder();
       const plaintextBuffer = enc.encode(textContent).buffer;
 
@@ -271,7 +451,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
         encryptedSize: encryptedBuffer.byteLength,
       }));
 
-      setSuccess('Encrypted changes saved to S3 Vault successfully!');
+      setSuccess('Encrypted changes saved to Vault successfully!');
       setEditorModalOpen(false);
     } catch (err) {
       console.error('Save failed:', err);
@@ -281,8 +461,10 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
     }
   };
 
-  const isEditor = file?.role === 'editor';
-  const isViewer = file?.role === 'viewer';
+  const isEditor = file?.role === 'editor' || folder?.role === 'editor';
+  const isViewer = file?.role === 'viewer' || folder?.role === 'viewer';
+  const itemName = linkData?.name || file?.originalName || folder?.name || 'Shared Resource';
+  const ownerName = linkData?.owner?.name || file?.owner?.name || folder?.owner?.name || 'Vault Owner';
 
   return (
     <div
@@ -291,7 +473,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
         if (isViewer) e.preventDefault();
       }}
     >
-      {/* CSS Print & Screen Capture Defense */}
+      {/* CSS Print Defense for Viewers */}
       {isViewer && (
         <style>{`
           @media print {
@@ -313,10 +495,10 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-lg tracking-tight">SecureVault</span>
                   <span className="bg-slate-800 text-blue-300 text-xs font-semibold px-2 py-0.5 rounded border border-slate-700 flex items-center gap-1">
-                    <Lock className="w-3 h-3 text-emerald-400" /> Zero-Knowledge Portal
+                    <Lock className="w-3 h-3 text-emerald-400" /> Zero-Knowledge Link Portal
                   </span>
                 </div>
-                <p className="text-xs text-slate-400">Public Shared Cryptographic Access</p>
+                <p className="text-xs text-slate-400">Encrypted Access Control</p>
               </div>
             </div>
 
@@ -332,7 +514,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                     onClick={onGoHome}
                     className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg border border-slate-700 transition-colors"
                   >
-                    Go to My Vault
+                    My Vault
                   </button>
                   <button
                     onClick={logout}
@@ -370,20 +552,21 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6">
         {loading ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-16 text-center space-y-3 shadow-xs">
             <Loader2 className="w-8 h-8 text-[#1e40af] animate-spin mx-auto" />
             <p className="text-xs text-slate-500 font-medium">
-              Verifying cryptographic ACL token with server...
+              Verifying link access parameters with SecureVault backend...
             </p>
           </div>
-        ) : error && !file ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-md mx-auto space-y-4 shadow-sm">
-            <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+        ) : error && accessState === 'checking' ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-md mx-auto space-y-4 shadow-sm text-center">
+            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-6 h-6" />
             </div>
+            <h3 className="text-sm font-bold text-slate-900">Link Unavailable</h3>
+            <p className="text-xs text-slate-500">{error}</p>
             <button
               onClick={onGoHome}
               className="w-full py-2.5 bg-[#1e40af] text-white text-xs font-medium rounded-xl hover:bg-blue-700 transition-colors"
@@ -391,7 +574,310 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
               Go to SecureVault Home
             </button>
           </div>
-        ) : file ? (
+        ) : accessState === 'unauth' ? (
+          /* STATE 1: Visitor Not Logged In (Requirement 2) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-[#1e40af] flex items-center justify-center mx-auto mb-2">
+                <Lock className="w-7 h-7" />
+              </div>
+              <h2 className="text-base font-bold text-slate-900">Protected Share Link</h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                You have received a link to access <span className="font-semibold text-slate-800">"{itemName}"</span> shared by <span className="font-semibold text-slate-800">{ownerName}</span>.
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs space-y-1">
+              <div className="font-semibold flex items-center gap-1.5">
+                <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>Authentication & MFA Required</span>
+              </div>
+              <p className="text-[11px] text-amber-800">
+                Possession of this link does not grant access. To protect zero-knowledge security, you must log in or register, complete authenticator-app TOTP MFA, and submit an access request to the owner.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setAuthModalMode('login');
+                  setShowAuthModal(true);
+                }}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs"
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => {
+                  setAuthModalMode('register');
+                  setShowAuthModal(true);
+                }}
+                className="w-full py-2.5 bg-[#1e40af] hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs"
+              >
+                Create Account
+              </button>
+            </div>
+          </div>
+        ) : accessState === 'mfa_setup' ? (
+          /* STATE 2: Logged in, MFA Setup Required (Requirement 2) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-2">
+                <ShieldAlert className="w-7 h-7" />
+              </div>
+              <h2 className="text-base font-bold text-slate-900">MFA Setup Required</h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Before submitting an access request for <span className="font-semibold text-slate-800">"{itemName}"</span>, you must configure Multi-Factor Authentication (authenticator-app TOTP) on your account.
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-950 text-xs space-y-1">
+              <span className="font-semibold">6-Digit Authenticator App Security</span>
+              <p className="text-[11px] text-blue-800">
+                SecureVault enforces RFC 6238 TOTP codes via Google Authenticator, Authy, or Microsoft Authenticator to prevent unauthorized access.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setMfaModalMode('setup');
+                setShowMfaModal(true);
+              }}
+              className="w-full py-2.5 bg-[#1e40af] hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs flex items-center justify-center gap-2"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>Set Up Authenticator App</span>
+            </button>
+          </div>
+        ) : accessState === 'mfa_verify' ? (
+          /* STATE 3: MFA Enabled, Verification Required for Session (Requirement 2) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-[#1e40af] flex items-center justify-center mx-auto mb-2">
+                <KeyRound className="w-7 h-7" />
+              </div>
+              <h2 className="text-base font-bold text-slate-900">MFA Verification Required</h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Please enter the 6-digit TOTP code from your authenticator app to verify your identity for this access attempt.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setMfaModalMode('verify');
+                setShowMfaModal(true);
+              }}
+              className="w-full py-2.5 bg-[#1e40af] hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs flex items-center justify-center gap-2"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>Enter 6-Digit MFA Code</span>
+            </button>
+          </div>
+        ) : accessState === 'can_request' ? (
+          /* STATE 4: MFA Verified, Ready to Create Access Request (Requirement 3) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-[#1e40af] flex items-center justify-center mx-auto mb-2">
+                <Send className="w-7 h-7" />
+              </div>
+              <h2 className="text-base font-bold text-slate-900">Request Access from Owner</h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                You are requesting access to <span className="font-semibold text-slate-800">"{itemName}"</span> owned by <span className="font-semibold text-slate-800">{ownerName}</span>.
+              </p>
+            </div>
+
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSendAccessRequest} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Requested Access Type
+                </label>
+                <select
+                  value={requestedRole}
+                  onChange={(e) => setRequestedRole(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white text-slate-900 focus:outline-hidden focus:border-[#1e40af]"
+                >
+                  <option value="viewer">Viewer (View & Decrypt in Browser)</option>
+                  <option value="editor">Editor (View, Edit & Upload Revisions)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Optional Note to Owner
+                </label>
+                <textarea
+                  value={requestMessage}
+                  onChange={(e) => setRequestMessage(e.target.value)}
+                  placeholder="Introduce yourself or describe why you need access..."
+                  rows={3}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white text-slate-900 focus:outline-hidden focus:border-[#1e40af] resize-none"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500">
+                <span className="font-semibold text-slate-700">Zero-Knowledge Guarantee:</span>
+                <p className="mt-0.5">
+                  Upon approval, the owner will wrap the file encryption key with your public key so only you can decrypt the contents.
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingRequest}
+                className="w-full py-2.5 bg-[#1e40af] hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {submittingRequest && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>Submit Access Request</span>
+              </button>
+            </form>
+          </div>
+        ) : accessState === 'pending' ? (
+          /* STATE 5: Access Request Pending (Requirement 3 & 10) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-2">
+              <Clock className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                Pending Approval
+              </div>
+              <h2 className="text-base font-bold text-slate-900 pt-2">Access Request Pending</h2>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                “Your access request has been sent to the owner. You will be notified when the owner responds.”
+              </p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-left space-y-2 text-xs">
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500">Resource</span>
+                <span className="font-semibold text-slate-800">{itemName}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500">Owner</span>
+                <span className="font-semibold text-slate-800">{ownerName}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500">Requested Permission</span>
+                <span className="font-semibold text-slate-800 uppercase tracking-wider text-[11px]">
+                  {pendingRequest?.requestedRole || requestedRole}
+                </span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-slate-500">Request Date</span>
+                <span className="font-mono text-slate-700 text-[11px]">
+                  {new Date(pendingRequest?.requestDate || pendingRequest?.createdAt || Date.now()).toLocaleDateString()}{' '}
+                  {new Date(pendingRequest?.requestDate || pendingRequest?.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={loadSharedAccess}
+                className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs flex items-center justify-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Check Approval Status</span>
+              </button>
+              <button
+                type="button"
+                onClick={onGoHome}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
+              >
+                Go to Vault Home
+              </button>
+            </div>
+          </div>
+        ) : accessState === 'rejected' ? (
+          /* STATE 6: Request Rejected (Requirement 5 & 10) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto mb-2">
+              <X className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-red-100 text-red-800 border border-red-300">
+                Rejected
+              </div>
+              <h2 className="text-base font-bold text-slate-900 pt-2">Access Request Rejected</h2>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                Your request to access <span className="font-semibold text-slate-800">"{itemName}"</span> was declined by the owner. Access remains blocked.
+              </p>
+            </div>
+
+            {rejectionReason && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs text-left">
+                <span className="font-semibold">Reason provided by owner:</span>
+                <p className="mt-0.5">{rejectionReason}</p>
+              </div>
+            )}
+
+            <button
+              onClick={onGoHome}
+              className="w-full py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 transition-colors shadow-xs"
+            >
+              Return to Vault Home
+            </button>
+          </div>
+        ) : accessState === 'revoked' ? (
+          /* STATE 7: Access Revoked (Requirement 8 & 10) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto mb-2">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-red-100 text-red-800 border border-red-300">
+                Revoked
+              </div>
+              <h2 className="text-base font-bold text-slate-900 pt-2">Access Revoked</h2>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                Your permission to access <span className="font-semibold text-slate-800">"{itemName}"</span> has been revoked by the owner. Previews, downloads, and key exchanges are blocked.
+              </p>
+            </div>
+
+            <button
+              onClick={onGoHome}
+              className="w-full py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 transition-colors shadow-xs"
+            >
+              Return to Vault Home
+            </button>
+          </div>
+        ) : accessState === 'expired' ? (
+          /* STATE 8: Link or Access Expired (Requirement 9 & 10) */
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg mx-auto shadow-sm space-y-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-slate-100 text-slate-600 flex items-center justify-center mx-auto mb-2">
+              <Clock className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-slate-200 text-slate-800 border border-slate-300">
+                Expired
+              </div>
+              <h2 className="text-base font-bold text-slate-900 pt-2">Share Link Expired</h2>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                This share link or your granted access time window has expired. Please contact the owner to request a new link.
+              </p>
+            </div>
+
+            <button
+              onClick={onGoHome}
+              className="w-full py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 transition-colors shadow-xs"
+            >
+              Return to Vault Home
+            </button>
+          </div>
+        ) : accessState === 'approved' ? (
+          /* STATE 9: Approved Authorized Access (Requirement 6) */
           <div className="space-y-6">
             {/* Status / Metric Banners */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -399,14 +885,16 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                 <span className="text-xs font-medium text-slate-500">Shared By</span>
                 <div className="mt-2">
                   <div className="text-sm font-bold text-slate-900 truncate">
-                    {file.owner?.name || 'Authorized Owner'}
+                    {ownerName}
                   </div>
-                  <div className="text-xs text-slate-500 font-mono truncate">{file.owner?.email}</div>
+                  <div className="text-xs text-slate-500 font-mono truncate">
+                    {linkData?.owner?.email || file?.owner?.email || folder?.owner?.email}
+                  </div>
                 </div>
               </div>
 
               <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
-                <span className="text-xs font-medium text-slate-500">Your Granted Role</span>
+                <span className="text-xs font-medium text-slate-500">Granted Role</span>
                 <div className="mt-2 flex items-center gap-2">
                   <span
                     className={`px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
@@ -415,24 +903,33 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                         : 'bg-blue-100 text-blue-900 border border-blue-300'
                     }`}
                   >
-                    {isEditor ? 'Editor (Read & Write)' : 'Viewer (View Only • Capture Disabled)'}
+                    {isEditor ? 'Editor (Read & Write)' : 'Viewer (View Only)'}
                   </span>
                 </div>
               </div>
 
               <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
-                <span className="text-xs font-medium text-slate-500">Decryption Key</span>
-                <div className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>URL Fragment Active (#key)</span>
+                <span className="text-xs font-medium text-slate-500">Download Permission</span>
+                <div className="mt-2">
+                  {(targetType === 'file' ? file?.allowDownload !== false : folder?.allowDownload !== false) ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800">
+                      <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Download Allowed</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-800">
+                      <X className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Download Blocked</span>
+                    </span>
+                  )}
                 </div>
               </div>
 
               <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
-                <span className="text-xs font-medium text-slate-500">Storage Engine</span>
-                <div className="mt-2 text-xs font-semibold text-slate-900">
-                  <span>Amazon S3 Bucket</span>
-                  <div className="text-[10px] text-slate-400 font-mono">eu-north-1</div>
+                <span className="text-xs font-medium text-slate-500">Decryption Method</span>
+                <div className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Zero-Knowledge ECDH P-256</span>
                 </div>
               </div>
             </div>
@@ -452,43 +949,74 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
               </div>
             )}
 
-            {/* Workspace Controls Header with + New Button */}
+            {/* Prompt to unlock private key if locked */}
+            {showUnlockPrompt && (
+              <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-xs space-y-3">
+                <div className="flex items-center gap-2 text-amber-900 font-bold">
+                  <KeyRound className="w-4 h-4 text-amber-700" />
+                  <span>Unlock Your Private Key</span>
+                </div>
+                <p className="text-amber-800 text-[11px]">
+                  Your browser session does not currently hold your decrypted ECDH private key in memory. Enter your account password to decrypt it client-side.
+                </p>
+                {unlockError && (
+                  <p className="text-red-600 font-medium">{unlockError}</p>
+                )}
+                <form onSubmit={handleUnlockKey} className="flex gap-2 max-w-md">
+                  <input
+                    type="password"
+                    value={unlockPassword}
+                    onChange={(e) => setUnlockPassword(e.target.value)}
+                    placeholder="Enter your account password"
+                    className="flex-1 p-2 bg-white border border-amber-300 rounded-lg text-xs text-slate-900 focus:outline-hidden"
+                  />
+                  <button
+                    type="submit"
+                    disabled={keyUnlocking || !unlockPassword}
+                    className="px-4 py-2 bg-amber-800 text-white rounded-lg font-semibold hover:bg-amber-900 transition-colors disabled:opacity-50"
+                  >
+                    {keyUnlocking ? 'Unlocking...' : 'Unlock'}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* Workspace Controls Header */}
             <div className="flex items-center justify-between bg-white border border-slate-200 p-4 rounded-xl shadow-2xs">
               <div className="flex items-center space-x-3">
-                <NewMenuButton
-                  onNewFolder={() => {
-                    if (!isAuthenticated) {
-                      setAuthModalMode('register');
-                      setShowAuthModal(true);
-                    }
-                  }}
-                  onFileUpload={() => {
-                    if (!isAuthenticated) {
-                      setAuthModalMode('login');
-                      setShowAuthModal(true);
-                    }
-                  }}
-                  onFolderUpload={() => {
-                    if (!isAuthenticated) {
-                      setAuthModalMode('login');
-                      setShowAuthModal(true);
-                    }
-                  }}
-                />
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-[#1e40af] flex items-center justify-center">
+                  {targetType === 'folder' ? <FolderIcon className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
+                </div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Shared Vault Workspace
+                    {targetType === 'folder' ? 'Approved Folder Workspace' : 'Approved Document Workspace'}
                   </h2>
                   <p className="text-xs text-slate-500">
                     {isEditor
                       ? 'You have editor access. You can view, edit, or upload revisions.'
+                      : (targetType === 'file' ? file?.allowDownload !== false : folder?.allowDownload !== false)
+                      ? 'You have view & download access.'
                       : 'You have view-only access. Downloading and screen captures are prohibited.'}
                   </p>
                 </div>
               </div>
 
-              {isEditor && (
-                <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2">
+                {targetType === 'file' && (
+                  <button
+                    onClick={() => {
+                      setActiveVersionFile(file);
+                      setShowVersionHistory(true);
+                    }}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-xl transition-colors flex items-center gap-1.5"
+                    title="Version History"
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    <span>Versions</span>
+                  </button>
+                )}
+
+                {isEditor && targetType === 'file' && (
                   <button
                     onClick={handleOpenEditor}
                     className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-xl transition-colors flex items-center gap-1.5 shadow-xs"
@@ -496,28 +1024,68 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                     <FileCode className="w-3.5 h-3.5" />
                     <span>Live Text Editor</span>
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
-            {/* RESPONSIVE GRID (No Col 1 Upload box, shared file displayed cleanly) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-              <FileCard
-                file={{
-                  ...file,
-                  role: file.role || 'viewer',
-                  isOwner: false,
-                }}
-                isSharedView={true}
-                onPreview={handlePreview}
-                onDownload={handleDownload}
-                onShare={() => {}}
-                onAudit={() => {}}
-                onDelete={() => {}}
-                downloading={downloading}
-                deleting={false}
-              />
-            </div>
+            {/* ITEM DISPLAY: FILE OR FOLDER (Requirement 6) */}
+            {targetType === 'file' && file ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+                <FileCard
+                  file={{
+                    ...file,
+                    role: file.role || 'viewer',
+                    allowDownload: file.allowDownload !== false,
+                    isOwner: false,
+                  }}
+                  isSharedView={true}
+                  onPreview={() => handlePreview(file)}
+                  onDownload={() => handleDownload(file)}
+                  onShare={() => {}}
+                  onAudit={() => {}}
+                  onDelete={() => {}}
+                  downloading={downloading}
+                  deleting={false}
+                />
+              </div>
+            ) : targetType === 'folder' && folder ? (
+              <div className="space-y-4">
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <div className="flex items-center gap-2 text-slate-800 font-bold text-sm mb-3">
+                    <FolderOpen className="w-4 h-4 text-amber-500" />
+                    <span>{folder.name}</span>
+                  </div>
+
+                  {(!folder.files || folder.files.length === 0) && (!folder.subfolders || folder.subfolders.length === 0) ? (
+                    <div className="p-8 text-center text-xs text-slate-400">
+                      This folder contains no files or subfolders yet.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                      {folder.files?.map((f) => (
+                        <FileCard
+                          key={f.id}
+                          file={{
+                            ...f,
+                            role: f.role || folder.role || 'viewer',
+                            allowDownload: f.allowDownload !== false,
+                            isOwner: false,
+                          }}
+                          isSharedView={true}
+                          onPreview={() => handlePreview(f)}
+                          onDownload={() => handleDownload(f)}
+                          onShare={() => {}}
+                          onAudit={() => {}}
+                          onDelete={() => {}}
+                          downloading={downloading}
+                          deleting={false}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </main>
@@ -527,20 +1095,52 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-2">
           <span>SecureVault Enterprise Cryptographic Sharing</span>
           <span className="font-mono text-[11px]">
-            Zero-Knowledge AES-256-GCM • ECDH P-256
+            Zero-Knowledge AES-256-GCM • ECDH P-256 • RFC 6238 TOTP
           </span>
         </div>
       </footer>
 
-      {/* Auth Modal for Secondary User Tap on + New */}
+      {/* Auth Modal (Login / Register) */}
       <AuthModal
         isOpen={showAuthModal}
         initialMode={authModalMode}
         onClose={() => setShowAuthModal(false)}
         onSuccess={() => {
-          setSuccess('Account authenticated! You can now access full vault features.');
+          setShowAuthModal(false);
+          loadSharedAccess();
         }}
       />
+
+      {/* MFA Modal (Setup / Verification) */}
+      <MfaModal
+        isOpen={showMfaModal}
+        mode={mfaModalMode}
+        onClose={() => setShowMfaModal(false)}
+        onSuccess={(token, updatedUser) => {
+          setShowMfaModal(false);
+          if (token && updatedUser) {
+            setSessionAuth(token, updatedUser);
+          }
+          loadSharedAccess();
+        }}
+      />
+
+      {/* Version History Modal */}
+      {showVersionHistory && activeVersionFile && (
+        <VersionHistoryModal
+          isOpen={showVersionHistory}
+          fileId={activeVersionFile.id || activeVersionFile._id}
+          fileName={activeVersionFile.originalName}
+          isOwner={activeVersionFile.isOwner || false}
+          allowDownload={activeVersionFile.allowDownload !== false}
+          role={activeVersionFile.role || 'viewer'}
+          fileCryptoKey={cryptoKey}
+          onClose={() => setShowVersionHistory(false)}
+          onVersionRestored={() => {
+            loadSharedAccess();
+          }}
+        />
+      )}
 
       {/* Decrypted Preview Modal with Screenshot Defense */}
       {previewOpen && (
@@ -572,7 +1172,6 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                 </button>
               </div>
             )}
-
 
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
               <div className="flex items-center space-x-2">
@@ -628,9 +1227,9 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
                   <p className="text-xs text-slate-500">
                     Direct inline preview is not supported for this file format.
                   </p>
-                  {!isViewer && (
+                  {file?.allowDownload !== false && (
                     <button
-                      onClick={handleDownload}
+                      onClick={() => handleDownload(file)}
                       className="px-4 py-2 bg-[#1e40af] text-white text-xs font-medium rounded-xl hover:bg-blue-700 transition-colors"
                     >
                       Download Plaintext File

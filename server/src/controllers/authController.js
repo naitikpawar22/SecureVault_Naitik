@@ -5,14 +5,19 @@ const config = require('../config/env');
 const User = require('../models/User');
 const RefreshToken = require('../models/RefreshToken');
 const auditService = require('../services/auditService');
+const totp = require('../utils/totp');
 
 /**
  * Generate Access and Refresh JWT Tokens
  */
-const generateTokens = async (userId) => {
-  const accessToken = jwt.sign({ id: userId }, config.jwtSecret, {
-    expiresIn: config.jwtExpiresIn,
-  });
+const generateTokens = async (userId, mfaVerified = false) => {
+  const accessToken = jwt.sign(
+    { id: userId, mfaVerified: Boolean(mfaVerified) },
+    config.jwtSecret,
+    {
+      expiresIn: config.jwtExpiresIn,
+    }
+  );
 
   const rawRefreshToken = crypto.randomBytes(40).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
@@ -51,9 +56,10 @@ const register = async (req, res, next) => {
       role: 'user',
       publicKey,
       encryptedPrivateKey: encryptedPrivateKey || null,
+      mfaEnabled: false,
     });
 
-    const tokens = await generateTokens(user._id);
+    const tokens = await generateTokens(user._id, false);
 
     await auditService.log({
       actorId: user._id,
@@ -73,7 +79,11 @@ const register = async (req, res, next) => {
         avatar: user.avatar || '',
         publicKey: user.publicKey,
         encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: false,
+        mfaVerified: false,
       },
+      mfaRequired: false,
+      mfaVerified: false,
       ...tokens,
     });
   } catch (err) {
@@ -101,18 +111,23 @@ const login = async (req, res, next) => {
       });
     }
 
-    const tokens = await generateTokens(user._id);
+    // If MFA is enabled, token initially has mfaVerified: false until 6-digit TOTP is submitted
+    const mfaRequired = Boolean(user.mfaEnabled);
+    const mfaVerified = !mfaRequired; // If MFA not enabled, user is considered mfaVerified: true for session
+    const tokens = await generateTokens(user._id, mfaVerified);
 
     await auditService.log({
       actorId: user._id,
       action: 'login',
       ipAddress: req.ip || req.connection.remoteAddress,
-      metadata: { email: user.email },
+      metadata: { email: user.email, mfaRequired },
     });
 
     res.status(200).json({
       success: true,
-      message: 'Login successful',
+      message: mfaRequired ? 'Password verified. MFA verification required.' : 'Login successful',
+      mfaRequired,
+      mfaVerified,
       user: {
         id: user._id,
         name: user.name,
@@ -121,6 +136,196 @@ const login = async (req, res, next) => {
         avatar: user.avatar || '',
         publicKey: user.publicKey,
         encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: user.mfaEnabled,
+        mfaVerified,
+      },
+      ...tokens,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Setup MFA - Generate secret & QR code data URL
+ */
+const setupMfa = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found.' });
+    }
+
+    const secret = totp.generateSecret();
+    const qrCode = await totp.generateQrCodeDataUrl(user.email, secret);
+
+    res.status(200).json({
+      success: true,
+      secret,
+      qrCode,
+      message: 'MFA secret generated. Please scan the QR code in your authenticator app and enter the 6-digit code to verify.',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Verify MFA Setup & Enable MFA for Account
+ */
+const verifyMfaSetup = async (req, res, next) => {
+  try {
+    const { code, secret } = req.body;
+    if (!code || !secret) {
+      return res.status(400).json({ success: false, error: '6-digit verification code and setup secret are required.' });
+    }
+
+    const isValid = totp.verifyOtp(code, secret);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Invalid 6-digit verification code. Please try again.' });
+    }
+
+    const user = await User.findById(req.user._id);
+    user.mfaEnabled = true;
+    user.mfaSecret = secret;
+    await user.save();
+
+    await auditService.log({
+      actorId: user._id,
+      action: 'mfa_enabled',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: { email: user.email },
+    });
+
+    // Issue updated token with mfaVerified: true
+    const tokens = await generateTokens(user._id, true);
+
+    res.status(200).json({
+      success: true,
+      message: 'Two-Factor Authentication (MFA) enabled and verified successfully!',
+      mfaVerified: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar || '',
+        publicKey: user.publicKey,
+        encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: true,
+        mfaVerified: true,
+      },
+      ...tokens,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Verify TOTP for session/login attempt
+ */
+const verifyMfa = async (req, res, next) => {
+  try {
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ success: false, error: '6-digit verification code is required.' });
+    }
+
+    const user = await User.findById(req.user._id).select('+mfaSecret');
+    if (!user || !user.mfaEnabled || !user.mfaSecret) {
+      return res.status(400).json({ success: false, error: 'MFA is not enabled on this account.' });
+    }
+
+    const isValid = totp.verifyOtp(code, user.mfaSecret);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Invalid 6-digit verification code.' });
+    }
+
+    await auditService.log({
+      actorId: user._id,
+      action: 'mfa_verified',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: { email: user.email },
+    });
+
+    // Issue updated token with mfaVerified: true
+    const tokens = await generateTokens(user._id, true);
+
+    res.status(200).json({
+      success: true,
+      message: 'MFA verification successful.',
+      mfaVerified: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar || '',
+        publicKey: user.publicKey,
+        encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: true,
+        mfaVerified: true,
+      },
+      ...tokens,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Disable MFA
+ */
+const disableMfa = async (req, res, next) => {
+  try {
+    const { password, code } = req.body;
+    const user = await User.findById(req.user._id).select('+mfaSecret');
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found.' });
+    }
+
+    if (password) {
+      const isMatch = await bcrypt.compare(password, user.passwordHash);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, error: 'Incorrect password.' });
+      }
+    }
+
+    if (code && user.mfaSecret) {
+      const isValid = totp.verifyOtp(code, user.mfaSecret);
+      if (!isValid) {
+        return res.status(400).json({ success: false, error: 'Invalid 6-digit verification code.' });
+      }
+    }
+
+    user.mfaEnabled = false;
+    user.mfaSecret = null;
+    await user.save();
+
+    await auditService.log({
+      actorId: user._id,
+      action: 'mfa_disabled',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: { email: user.email },
+    });
+
+    const tokens = await generateTokens(user._id, false);
+
+    res.status(200).json({
+      success: true,
+      message: 'MFA has been disabled for your account.',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar || '',
+        publicKey: user.publicKey,
+        encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: false,
+        mfaVerified: false,
       },
       ...tokens,
     });
@@ -165,7 +370,9 @@ const refreshToken = async (req, res, next) => {
       });
     }
 
-    const newTokens = await generateTokens(user._id);
+    // Maintain current mfaVerified state if user has MFA enabled
+    const mfaVerified = !user.mfaEnabled;
+    const newTokens = await generateTokens(user._id, mfaVerified);
 
     res.status(200).json({
       success: true,
@@ -214,6 +421,8 @@ const getMe = async (req, res, next) => {
         avatar: user.avatar || '',
         publicKey: user.publicKey,
         encryptedPrivateKey: user.encryptedPrivateKey,
+        mfaEnabled: Boolean(user.mfaEnabled),
+        mfaVerified: Boolean(req.user.mfaVerified),
       },
     });
   } catch (err) {
@@ -221,4 +430,14 @@ const getMe = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, refreshToken, logout, getMe };
+module.exports = {
+  register,
+  login,
+  setupMfa,
+  verifyMfaSetup,
+  verifyMfa,
+  disableMfa,
+  refreshToken,
+  logout,
+  getMe,
+};

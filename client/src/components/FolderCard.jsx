@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Folder, MoreVertical, Edit2, Trash2, FolderOpen, Share2 } from 'lucide-react';
+import { Folder, MoreVertical, Edit2, Trash2, FolderOpen, Share2, Link as LinkIcon, Users } from 'lucide-react';
 
 export default function FolderCard({
   folder,
@@ -7,6 +7,8 @@ export default function FolderCard({
   onRename,
   onDelete,
   onShare,
+  onGenerateLink,
+  onManageAccess,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -71,7 +73,7 @@ export default function FolderCard({
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-1 w-36 bg-white rounded-lg shadow-lg border border-slate-200 py-1 z-30 text-xs">
+            <div className="absolute right-0 mt-1 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 z-30 text-xs">
               <button
                 type="button"
                 onClick={() => {
@@ -83,6 +85,49 @@ export default function FolderCard({
                 <FolderOpen className="w-3.5 h-3.5 text-slate-400" />
                 <span>Open</span>
               </button>
+
+              {folder.isOwner !== false && onGenerateLink && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onGenerateLink(folder);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <LinkIcon className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Generate Link</span>
+                </button>
+              )}
+
+              {folder.isOwner !== false && onManageAccess && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onManageAccess(folder);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <Users className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Manage Access</span>
+                </button>
+              )}
+
+              {folder.isOwner !== false && onShare && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (onShare) onShare(folder);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Share with Users</span>
+                </button>
+              )}
+
               {(folder.isOwner !== false || folder.role === 'editor') && onRename && (
                 <button
                   type="button"
@@ -94,19 +139,6 @@ export default function FolderCard({
                 >
                   <Edit2 className="w-3.5 h-3.5 text-slate-400" />
                   <span>Rename</span>
-                </button>
-              )}
-              {folder.isOwner !== false && onShare && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    if (onShare) onShare(folder);
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                >
-                  <Share2 className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Share</span>
                 </button>
               )}
               {folder.isOwner !== false && onDelete && (

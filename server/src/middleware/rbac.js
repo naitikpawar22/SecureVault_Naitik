@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const File = require('../models/File');
+const Folder = require('../models/Folder');
 const FilePermission = require('../models/FilePermission');
 
 /**
@@ -45,15 +46,46 @@ const checkFileAccess = (requiredRole = 'viewer') => {
       }
 
       // 2. Otherwise, check FilePermission collection
-      const permission = await FilePermission.findOne({
+      let permission = await FilePermission.findOne({
         fileId: file._id,
         userId: userId,
+        isRevoked: { $ne: true },
       });
+
+      // If not directly in FilePermission, check if user has access via parent Folder
+      if (!permission && file.folderId) {
+        const parentFolder = await Folder.findOne({
+          _id: file.folderId,
+          status: 'active',
+          'sharedWith.userId': userId,
+        });
+
+        if (parentFolder) {
+          const sw = parentFolder.sharedWith.find((s) => s.userId.toString() === userId.toString());
+          if (sw && (!sw.expiresAt || new Date() <= sw.expiresAt)) {
+            permission = {
+              role: sw.role,
+              allowDownload: sw.allowDownload !== false,
+              expiresAt: sw.expiresAt,
+              wrappedFileKey: file.encryptedFileKey,
+            };
+          }
+        }
+      }
 
       if (!permission) {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You do not have permission to access this file.',
+        });
+      }
+
+      // Check expiration
+      if (permission.expiresAt && new Date() > permission.expiresAt) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. Your permission to access this file has expired.',
+          code: 'PERMISSION_EXPIRED',
         });
       }
 
@@ -67,6 +99,7 @@ const checkFileAccess = (requiredRole = 'viewer') => {
 
       req.fileDoc = file;
       req.userRole = permission.role;
+      req.permissionDoc = permission;
       req.wrappedFileKey = permission.wrappedFileKey;
       return next();
     } catch (err) {

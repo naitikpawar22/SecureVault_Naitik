@@ -39,10 +39,45 @@ const authenticate = async (req, res, next) => {
     }
 
     req.user = user;
+    // Track whether MFA has been verified for this token/session
+    req.user.mfaVerified = decoded.mfaVerified === true;
     next();
   } catch (err) {
     next(err);
   }
 };
 
+/**
+ * Middleware ensuring user has MFA enabled and verified for this session
+ */
+const requireMfa = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required.',
+    });
+  }
+
+  if (!req.user.mfaEnabled) {
+    return res.status(403).json({
+      success: false,
+      code: 'MFA_SETUP_REQUIRED',
+      error: 'MFA setup is required before performing this action.',
+    });
+  }
+
+  if (!req.user.mfaVerified) {
+    return res.status(403).json({
+      success: false,
+      code: 'MFA_VERIFICATION_REQUIRED',
+      error: 'MFA verification required for this session.',
+    });
+  }
+
+  next();
+};
+
 module.exports = authenticate;
+module.exports.authenticate = authenticate;
+module.exports.requireMfa = requireMfa;
+

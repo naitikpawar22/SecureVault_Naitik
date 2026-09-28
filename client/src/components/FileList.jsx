@@ -106,9 +106,9 @@ export default function FileList({
    * Zero-Knowledge Decryption & Download in Browser
    */
   const handleDownload = async (file) => {
-    // If viewer, downloading is disallowed
-    if (file.role === 'viewer') {
-      alert('Downloading is disabled for Viewers. You can view the document in protected preview mode.');
+    // Check if downloading is restricted by the owner
+    if (file.allowDownload === false) {
+      alert('Downloading is disabled for this item by the owner. You can view it in protected preview mode.');
       return;
     }
 
@@ -123,8 +123,12 @@ export default function FileList({
     try {
       // 1. Fetch file record to get the user's wrapped file key
       const meta = await api.files.get(file.id);
-      const wrappedKeyBundle = meta.file.wrappedFileKey;
-      const iv = meta.file.iv;
+      const wrappedKeyBundle = meta.file?.wrappedFileKey || file.wrappedFileKey;
+      const iv = meta.file?.iv || file.iv;
+
+      if (!wrappedKeyBundle) {
+        throw new Error('Encryption key is not available for your account. Please ask the owner to update permissions for this item.');
+      }
 
       // 2. Fetch encrypted binary from server
       const { blob } = await api.files.download(file.id);
@@ -150,7 +154,11 @@ export default function FileList({
       URL.revokeObjectURL(downloadUrl);
     } catch (err) {
       console.error('Download decryption error:', err);
-      setError(`Decryption failed: ${err.message}`);
+      if (err.name === 'OperationError' || err.message?.includes('OperationError')) {
+        setError('Decryption failed: Key mismatch. Please ask the owner to re-grant or update access so your encryption key is properly renewed.');
+      } else {
+        setError(`Decryption failed: ${err.message}`);
+      }
     } finally {
       setDownloadingId(null);
     }

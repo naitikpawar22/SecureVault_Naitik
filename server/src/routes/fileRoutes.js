@@ -39,7 +39,7 @@ router.get('/encrypted-search', fileController.encryptedSearch);
 router.get('/:id', checkFileAccess('viewer'), fileController.getFile);
 router.get('/:id/download', checkFileAccess('viewer'), fileController.downloadFile);
 router.patch('/:id/rename', checkFileAccess('owner'), fileController.renameFile);
-router.delete('/:id', checkFileAccess('owner'), fileController.deleteFile);
+router.delete('/:id', checkFileAccess('delete'), fileController.deleteFile);
 
 // === Shareable Links & Key Rotation (Owner only) ===
 router.post('/:id/share-link', checkFileAccess('owner'), shareLinkController.createShareLink);

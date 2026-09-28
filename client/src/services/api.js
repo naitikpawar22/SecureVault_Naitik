@@ -178,6 +178,8 @@ export const api = {
     listOwner: (status = '') => request(`/access-requests/owner${status ? `?status=${status}` : ''}`),
     approve: (id, data) => request(`/access-requests/${id}/approve`, { method: 'POST', body: JSON.stringify(data) }),
     reject: (id, data) => request(`/access-requests/${id}/reject`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (id, data) => request(`/access-requests/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    revoke: (id) => request(`/access-requests/${id}/revoke`, { method: 'POST' }),
   },
 
   // Owner Access Management (Requirement 8)
@@ -210,11 +212,16 @@ export const api = {
   // Public / Tokenized Shared Links
   shared: {
     getLinkFile: (token) => request(`/shared/link/${token}`),
-    downloadLinkFile: (token, purpose = '') => {
-      const qs = purpose ? `?purpose=${encodeURIComponent(purpose)}` : '';
+    downloadLinkFile: (token, purpose = '', fileId = '') => {
+      const params = new URLSearchParams();
+      if (purpose) params.append('purpose', purpose);
+      if (fileId) params.append('fileId', fileId);
+      const qs = params.toString() ? `?${params.toString()}` : '';
       return request(`/shared/link/${token}/download${qs}`);
     },
     updateLinkFile: (token, formData) => request(`/shared/link/${token}/update`, { method: 'POST', body: formData }),
+    uploadFolderFile: (token, formData) => request(`/shared/link/${token}/upload`, { method: 'POST', body: formData }),
+    deleteFolderFile: (token, fileId) => request(`/shared/link/${token}/file/${fileId}`, { method: 'DELETE' }),
   },
 
   // Audit Logs

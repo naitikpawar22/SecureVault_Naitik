@@ -266,8 +266,25 @@ export async function wrapFileKeyForRecipient(fek, recipientPublicKeyJwk) {
  * Unwrap a File Encryption Key (FEK) using recipient's ECDH Private Key
  */
 export async function unwrapFileKey(wrappedBundle, recipientPrivateKey) {
+  if (!wrappedBundle) {
+    throw new Error('A wrapped file key bundle is required for decryption.');
+  }
+
+  let bundle = wrappedBundle;
+  if (typeof bundle === 'string') {
+    try {
+      bundle = JSON.parse(bundle);
+    } catch {
+      // not JSON string
+    }
+  }
+
+  if (!bundle || !bundle.ephemeralPublicKey || !bundle.wrapIv || !bundle.wrappedKey) {
+    throw new Error('Invalid wrapped key bundle format.');
+  }
+
   // 1. Import ephemeral public key
-  const ephemeralKey = await importPublicKey(wrappedBundle.ephemeralPublicKey);
+  const ephemeralKey = await importPublicKey(bundle.ephemeralPublicKey);
 
   // 2. Derive the exact same shared wrapping key
   const wrappingKey = await window.crypto.subtle.deriveKey(
@@ -282,8 +299,8 @@ export async function unwrapFileKey(wrappedBundle, recipientPrivateKey) {
   );
 
   // 3. Decrypt the wrapped key bytes
-  const wrapIv = hexToBuffer(wrappedBundle.wrapIv);
-  const wrappedBytes = base64ToBuffer(wrappedBundle.wrappedKey);
+  const wrapIv = hexToBuffer(bundle.wrapIv);
+  const wrappedBytes = base64ToBuffer(bundle.wrappedKey);
 
   const rawFek = await window.crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: wrapIv },

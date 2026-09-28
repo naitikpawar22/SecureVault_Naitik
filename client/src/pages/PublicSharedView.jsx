@@ -325,7 +325,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
 
     try {
       const fek = await resolveCryptoKey(fileObj);
-      const { blob } = await api.shared.downloadLinkFile(token);
+      const { blob } = await api.shared.downloadLinkFile(token, '', fileObj?.id || fileObj?._id);
       const encryptedBuffer = await blob.arrayBuffer();
       const decryptedBuffer = await decryptFile(encryptedBuffer, fek, fileObj.iv);
 
@@ -360,7 +360,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
 
     try {
       const fek = await resolveCryptoKey(fileObj);
-      const { blob } = await api.shared.downloadLinkFile(token, 'preview');
+      const { blob } = await api.shared.downloadLinkFile(token, 'preview', fileObj?.id || fileObj?._id);
       const encryptedBuffer = await blob.arrayBuffer();
       const decryptedBuffer = await decryptFile(encryptedBuffer, fek, fileObj.iv);
 
@@ -408,7 +408,7 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
 
     try {
       const fek = await resolveCryptoKey(file);
-      const { blob } = await api.shared.downloadLinkFile(token, 'preview');
+      const { blob } = await api.shared.downloadLinkFile(token, 'preview', file?.id || file?._id);
       const encryptedBuffer = await blob.arrayBuffer();
       const decryptedBuffer = await decryptFile(encryptedBuffer, fek, file.iv);
       const dec = new TextDecoder();

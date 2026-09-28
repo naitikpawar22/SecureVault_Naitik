@@ -20,4 +20,8 @@ router.get('/owner', accessRequestController.listOwnerRequests);
 router.post('/:id/approve', accessRequestController.approveRequest);
 router.post('/:id/reject', accessRequestController.rejectRequest);
 
+// Owner-side: Update role (Viewer <-> Editor) and Disable/Revoke access
+router.patch('/:id', accessRequestController.updateRequestPermission);
+router.post('/:id/revoke', accessRequestController.revokeRequestAccess);
+
 module.exports = router;

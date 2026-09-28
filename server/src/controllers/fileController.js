@@ -48,11 +48,31 @@ const uploadFile = async (req, res, next) => {
       }
     }
 
+    // Verify folder write permission if folderId is provided
+    let folder = null;
+    if (folderId && folderId !== 'null' && folderId !== 'root') {
+      folder = await Folder.findOne({
+        _id: folderId,
+        status: 'active',
+        $or: [
+          { ownerId: req.user._id },
+          { 'sharedWith.userId': req.user._id, 'sharedWith.role': 'editor' },
+        ],
+      });
+
+      if (!folder) {
+        return res.status(403).json({
+          success: false,
+          error: 'Folder not found or you do not have permission to add files to this folder.',
+        });
+      }
+    }
+
     // Save metadata in MongoDB File collection
     const file = await File.create({
       originalName: originalName.trim(),
       ownerId: req.user._id,
-      folderId: folderId && folderId !== 'null' && folderId !== 'root' ? folderId : null,
+      folderId: folder ? folder._id : (folderId && folderId !== 'null' && folderId !== 'root' ? folderId : null),
       s3ObjectKey,
       encryptedSize,
       mimeType: mimeType || 'application/octet-stream',
@@ -63,6 +83,38 @@ const uploadFile = async (req, res, next) => {
       currentVersion: 1,
       searchTokens: parsedTokens,
     });
+
+    // If uploaded into a shared folder by a collaborator (e.g. Aaru), grant access to folder owner (Naitik)
+    if (folder && !folder.ownerId.equals(req.user._id)) {
+      await FilePermission.findOneAndUpdate(
+        { fileId: file._id, userId: folder.ownerId },
+        {
+          role: 'owner',
+          wrappedFileKey: parsedFileKey,
+          grantedBy: req.user._id,
+          allowDownload: true,
+          createdAt: new Date(),
+        },
+        { upsert: true }
+      );
+
+      // Grant access to other collaborators in folder.sharedWith
+      for (const sw of folder.sharedWith) {
+        if (!sw.userId.equals(req.user._id)) {
+          await FilePermission.findOneAndUpdate(
+            { fileId: file._id, userId: sw.userId },
+            {
+              role: sw.role,
+              wrappedFileKey: parsedFileKey,
+              grantedBy: req.user._id,
+              allowDownload: sw.allowDownload !== false,
+              createdAt: new Date(),
+            },
+            { upsert: true }
+          );
+        }
+      }
+    }
 
     // Create initial Version 1 entry in FileVersion schema
     await FileVersion.create({
@@ -77,9 +129,10 @@ const uploadFile = async (req, res, next) => {
       createdAt: file.createdAt,
     });
 
-    // Write immutable audit log
+    // Write immutable audit log linked to folder so owner can see what collaborator did
     await auditService.log({
       fileId: file._id,
+      folderId: folder ? folder._id : null,
       actorId: req.user._id,
       action: 'upload',
       ipAddress: req.ip || req.connection.remoteAddress,
@@ -88,7 +141,14 @@ const uploadFile = async (req, res, next) => {
         size: file.encryptedSize,
         mimeType: file.mimeType,
         version: 1,
-        actionDetail: 'Uploaded initial file version v1',
+        folderId: folder ? folder._id : null,
+        folderName: folder ? folder.name : undefined,
+        folderOwnerId: folder ? folder.ownerId : file.ownerId,
+        actorName: req.user.name,
+        actorEmail: req.user.email,
+        actionDetail: folder && !folder.ownerId.equals(req.user._id)
+          ? `${req.user.name} (${req.user.email}) uploaded file "${file.originalName}" into shared folder "${folder.name}"`
+          : `Uploaded initial file version v1`,
       },
     });
 
@@ -116,6 +176,103 @@ const listFiles = async (req, res, next) => {
   try {
     const userId = req.user._id;
     const { folderId, all } = req.query;
+
+    // If querying inside a specific folder (personal or shared)
+    if (folderId && folderId !== 'root' && folderId !== 'null') {
+      const targetFolder = await Folder.findOne({
+        _id: folderId,
+        status: 'active',
+        $or: [
+          { ownerId: userId },
+          { 'sharedWith.userId': userId },
+        ],
+      }).populate('ownerId', 'name email');
+
+      if (targetFolder) {
+        const isFolderOwner = targetFolder.ownerId._id
+          ? targetFolder.ownerId._id.equals(userId)
+          : targetFolder.ownerId.equals(userId);
+        const folderSw = targetFolder.sharedWith?.find(
+          (s) => s.userId && s.userId.toString() === userId.toString()
+        );
+        const folderRole = isFolderOwner ? 'owner' : (folderSw?.role || 'viewer');
+        const canFolderEdit = folderRole === 'owner' || folderRole === 'editor';
+
+        // Fetch all active files in this folder
+        const folderFiles = await File.find({
+          folderId: targetFolder._id,
+          status: 'active',
+        })
+          .sort({ createdAt: -1 })
+          .populate('ownerId', 'name email');
+
+        // Fetch user-specific permissions for these files
+        const permissions = await FilePermission.find({
+          fileId: { $in: folderFiles.map((f) => f._id) },
+          userId,
+        });
+        const permMap = new Map(permissions.map((p) => [p.fileId.toString(), p]));
+
+        const formattedFiles = folderFiles.map((f) => {
+          const isFileOwner = f.ownerId._id
+            ? f.ownerId._id.equals(userId)
+            : f.ownerId.equals(userId);
+          const p = permMap.get(f._id.toString());
+          const role = isFileOwner
+            ? 'owner'
+            : isFolderOwner
+            ? 'owner'
+            : folderRole === 'editor'
+            ? 'editor'
+            : 'viewer';
+
+          return {
+            id: f._id,
+            originalName: f.originalName,
+            folderId: f.folderId || null,
+            encryptedSize: f.encryptedSize,
+            mimeType: f.mimeType,
+            encryptionAlgorithm: f.encryptionAlgorithm,
+            iv: f.iv,
+            encryptedFileKey: f.encryptedFileKey,
+            wrappedFileKey: p?.wrappedFileKey || f.encryptedFileKey,
+            isOwner: isFileOwner || isFolderOwner,
+            role,
+            canEdit: isFileOwner || canFolderEdit,
+            canDelete: isFileOwner || canFolderEdit,
+            allowDownload: p ? p.allowDownload !== false : true,
+            currentVersion: f.currentVersion || 1,
+            owner: {
+              id: f.ownerId._id,
+              name: f.ownerId.name,
+              email: f.ownerId.email,
+            },
+            createdAt: f.createdAt,
+            updatedAt: f.updatedAt,
+          };
+        });
+
+        const owned = formattedFiles.filter((f) => f.isOwner);
+        const shared = formattedFiles.filter((f) => !f.isOwner);
+
+        return res.status(200).json({
+          success: true,
+          files: isFolderOwner ? formattedFiles : owned,
+          sharedFiles: isFolderOwner ? [] : formattedFiles,
+          folderRole,
+          canUpload: canFolderEdit,
+          folder: {
+            id: targetFolder._id,
+            name: targetFolder.name,
+            role: folderRole,
+            owner: {
+              name: targetFolder.ownerId.name,
+              email: targetFolder.ownerId.email,
+            },
+          },
+        });
+      }
+    }
 
     const ownedQuery = {
       ownerId: userId,
@@ -176,6 +333,7 @@ const listFiles = async (req, res, next) => {
         wrappedFileKey: p.wrappedFileKey,
         isOwner: false,
         role: p.role,
+        allowDownload: p.allowDownload !== false,
         currentVersion: p.fileId.currentVersion || 1,
         owner: p.fileId.ownerId
           ? {
@@ -326,7 +484,7 @@ const downloadFile = async (req, res, next) => {
 
 const deleteFile = async (req, res, next) => {
   try {
-    const file = req.fileDoc; // Attached by checkFileAccess('owner')
+    const file = req.fileDoc; // Attached by checkFileAccess('delete')
 
     // Mark as deleted in DB
     file.status = 'deleted';
@@ -341,15 +499,29 @@ const deleteFile = async (req, res, next) => {
     // Remove from physical storage
     await storageService.deleteFile(file.s3ObjectKey);
 
-    // Audit log
+    // Fetch parent folder if applicable for audit trail
+    let folder = req.parentFolder;
+    if (!folder && file.folderId) {
+      folder = await Folder.findById(file.folderId);
+    }
+
+    // Comprehensive Audit log so folder owner sees deletion by secondary user (e.g. Aaru)
     await auditService.log({
       fileId: file._id,
+      folderId: file.folderId || (folder ? folder._id : null),
       actorId: req.user._id,
       action: 'delete',
       ipAddress: req.ip || req.connection.remoteAddress,
       metadata: {
         originalName: file.originalName,
-        actionDetail: 'Deleted file and removed all versions',
+        folderId: file.folderId,
+        folderName: folder ? folder.name : undefined,
+        folderOwnerId: folder ? folder.ownerId : file.ownerId,
+        actorName: req.user.name,
+        actorEmail: req.user.email,
+        actionDetail: folder && !folder.ownerId.equals(req.user._id)
+          ? `${req.user.name} (${req.user.email}) deleted file "${file.originalName}" from shared folder "${folder.name}"`
+          : `Deleted file "${file.originalName}" and removed all versions`,
       },
     });
 

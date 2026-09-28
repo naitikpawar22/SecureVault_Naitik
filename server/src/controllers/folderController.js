@@ -4,6 +4,7 @@ const File = require('../models/File');
 const User = require('../models/User');
 const FilePermission = require('../models/FilePermission');
 const FolderShareLink = require('../models/FolderShareLink');
+const AccessRequest = require('../models/AccessRequest');
 const storageService = require('../services/storageService');
 const auditService = require('../services/auditService');
 
@@ -523,6 +524,12 @@ const revokeFolderPermission = async (req, res, next) => {
     if (fileIds.length > 0) {
       await FilePermission.deleteMany({ fileId: { $in: fileIds }, userId });
     }
+
+    // Sync AccessRequest
+    await AccessRequest.updateMany(
+      { folderId: { $in: allFolderIds }, requesterId: userId, status: 'approved' },
+      { status: 'revoked' }
+    );
 
     await auditService.log({
       fileId: null,

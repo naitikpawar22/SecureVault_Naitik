@@ -6,10 +6,12 @@ const FolderShareLink = require('../models/FolderShareLink');
 const File = require('../models/File');
 const Folder = require('../models/Folder');
 const FilePermission = require('../models/FilePermission');
+const FileVersion = require('../models/FileVersion');
 const AccessRequest = require('../models/AccessRequest');
 const User = require('../models/User');
 const storageService = require('../services/storageService');
 const auditService = require('../services/auditService');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Helper to optionally extract authenticated user and MFA verification status from Bearer token
@@ -249,6 +251,13 @@ const accessShareLink = async (req, res, next) => {
           },
         });
       } else {
+        const [unauthFiles, unauthSubfolders] = await Promise.all([
+          File.find({ folderId: folderLink.folderId._id, status: 'active' }).select(
+            'originalName encryptedSize mimeType iv currentVersion createdAt'
+          ),
+          Folder.find({ parentId: folderLink.folderId._id, status: 'active' }),
+        ]);
+
         return res.status(200).json({
           success: true,
           requiresAuth: true,
@@ -270,10 +279,23 @@ const accessShareLink = async (req, res, next) => {
             name: folderLink.folderId.name,
             color: folderLink.folderId.color,
             role: activeLink.role || 'viewer',
+            allowDownload: activeLink.allowDownload !== false,
             owner: {
               name: folderLink.createdBy.name,
               email: folderLink.createdBy.email,
             },
+            files: unauthFiles.map((f) => ({
+              id: f._id,
+              originalName: f.originalName,
+              encryptedSize: f.encryptedSize,
+              mimeType: f.mimeType,
+              iv: f.iv,
+              currentVersion: f.currentVersion || 1,
+              createdAt: f.createdAt,
+              role: activeLink.role || 'viewer',
+              allowDownload: activeLink.allowDownload !== false,
+            })),
+            subfolders: unauthSubfolders,
           },
         });
       }
@@ -563,31 +585,51 @@ const accessShareLink = async (req, res, next) => {
 };
 
 /**
- * Download encrypted file stream via share link
+ * Download encrypted file stream via share link (File or Folder)
  */
 const downloadShareLinkFile = async (req, res, next) => {
   try {
     const { token } = req.params;
+    const { fileId, purpose } = req.query;
+    const isPreview = purpose === 'preview';
 
-    const link = await FileShareLink.findOne({ token, isRevoked: false }).populate('fileId');
-    if (!link || !link.fileId || link.fileId.status === 'deleted') {
-      return res.status(404).json({ success: false, error: 'Link invalid, expired, or revoked.' });
+    let fileLink = await FileShareLink.findOne({ token, isRevoked: false }).populate('fileId');
+    let folderLink = null;
+    let file = null;
+    let activeLink = null;
+
+    if (fileLink && fileLink.fileId && fileLink.fileId.status !== 'deleted') {
+      activeLink = fileLink;
+      file = fileLink.fileId;
+    } else {
+      folderLink = await FolderShareLink.findOne({ token, isRevoked: false }).populate('folderId');
+      if (!folderLink || !folderLink.folderId || folderLink.folderId.status === 'deleted') {
+        return res.status(404).json({ success: false, error: 'Link invalid, expired, or revoked.' });
+      }
+      activeLink = folderLink;
+      if (fileId) {
+        file = await File.findOne({ _id: fileId, folderId: folderLink.folderId._id, status: 'active' });
+      } else {
+        file = await File.findOne({ folderId: folderLink.folderId._id, status: 'active' });
+      }
+      if (!file) {
+        return res.status(404).json({ success: false, error: 'File not found in shared folder.' });
+      }
     }
 
-    if (link.isDisabled) {
+    if (activeLink.isDisabled) {
       return res.status(403).json({ success: false, error: 'Share link has been disabled by the owner.' });
     }
 
-    if (link.expiresAt && new Date() > link.expiresAt) {
+    if (activeLink.expiresAt && new Date() > activeLink.expiresAt) {
       return res.status(410).json({ success: false, error: 'Share link has expired.' });
     }
 
-    const isPreview = req.query.purpose === 'preview';
     const authContext = await getAuthUserOptional(req);
 
     if (!authContext) {
       // Unauthenticated visitor: enforce viewer restriction from link
-      if ((link.role === 'viewer' || link.allowDownload === false) && !isPreview) {
+      if ((activeLink.role === 'viewer' || activeLink.allowDownload === false) && !isPreview) {
         return res.status(403).json({
           success: false,
           error: 'Downloading is disabled for this document. You have view-only access.',
@@ -596,7 +638,7 @@ const downloadShareLinkFile = async (req, res, next) => {
       }
     } else {
       const { user } = authContext;
-      const isOwner = link.createdBy.toString() === user._id.toString();
+      const isOwner = activeLink.createdBy.toString() === user._id.toString();
 
       if (!isOwner) {
         // Recipient must have an approved access request
@@ -615,46 +657,57 @@ const downloadShareLinkFile = async (req, res, next) => {
           });
         }
 
-        // Check FilePermission allowDownload
-        const permission = await FilePermission.findOne({
-          fileId: link.fileId._id,
-          userId: user._id,
-          isRevoked: { $ne: true },
-        });
-
-        if (!permission) {
-          return res.status(403).json({
-            success: false,
-            error: 'Your permission to access this file has been revoked.',
+        // If fileLink, check FilePermission allowDownload
+        if (fileLink) {
+          const permission = await FilePermission.findOne({
+            fileId: file._id,
+            userId: user._id,
+            isRevoked: { $ne: true },
           });
-        }
 
-        if (permission.expiresAt && new Date() > permission.expiresAt) {
-          return res.status(403).json({ success: false, error: 'Access permission has expired.' });
-        }
+          if (!permission) {
+            return res.status(403).json({
+              success: false,
+              error: 'Your permission to access this file has been revoked.',
+            });
+          }
 
-        if (permission.allowDownload === false && !isPreview) {
-          return res.status(403).json({
-            success: false,
-            error: 'Downloading is disabled for this document. You have view-only access.',
-            code: 'DOWNLOAD_BLOCKED',
-          });
+          if (permission.expiresAt && new Date() > permission.expiresAt) {
+            return res.status(403).json({ success: false, error: 'Access permission has expired.' });
+          }
+
+          if (permission.allowDownload === false && !isPreview) {
+            return res.status(403).json({
+              success: false,
+              error: 'Downloading is disabled for this document. You have view-only access.',
+              code: 'DOWNLOAD_BLOCKED',
+            });
+          }
+        } else if (folderLink) {
+          // Check folder permissions
+          if (folderLink.allowDownload === false && !isPreview) {
+            return res.status(403).json({
+              success: false,
+              error: 'Downloading is disabled for this folder. You have view-only access.',
+              code: 'DOWNLOAD_BLOCKED',
+            });
+          }
         }
       }
     }
 
-    const file = link.fileId;
     const fileStream = await storageService.getFileStream(file.s3ObjectKey);
 
     await auditService.log({
       fileId: file._id,
-      actorId: authContext?.user?._id || link.createdBy,
+      folderId: folderLink ? folderLink.folderId._id : (file.folderId || null),
+      actorId: authContext?.user?._id || activeLink.createdBy,
       action: isPreview ? 'preview' : 'download',
       ipAddress: req.ip || req.connection.remoteAddress,
       metadata: {
         originalName: file.originalName,
-        accessVia: 'share_link',
-        role: link.role,
+        accessVia: folderLink ? 'shared_folder_link' : 'share_link',
+        role: activeLink.role,
         purpose: isPreview ? 'preview' : 'download',
       },
     });
@@ -785,6 +838,224 @@ const rotateKey = async (req, res, next) => {
   }
 };
 
+/**
+ * Upload a file into a shared folder via folder share link (Editor role required)
+ */
+const uploadSharedFolderFile = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const folderLink = await FolderShareLink.findOne({ token, isRevoked: false })
+      .populate('folderId')
+      .populate('createdBy', 'name email');
+
+    if (!folderLink || !folderLink.folderId || folderLink.folderId.status === 'deleted') {
+      return res.status(404).json({ success: false, error: 'Shared folder link is invalid or revoked.' });
+    }
+
+    if (folderLink.isDisabled) {
+      return res.status(403).json({ success: false, error: 'This share link has been disabled by the owner.' });
+    }
+
+    if (folderLink.expiresAt && new Date() > folderLink.expiresAt) {
+      return res.status(410).json({ success: false, error: 'This share link has expired.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'Encrypted file payload is required.' });
+    }
+
+    const authContext = await getAuthUserOptional(req);
+    const isOwner = authContext?.user?._id && folderLink.createdBy._id.toString() === authContext.user._id.toString();
+    const canUpload = isOwner || folderLink.role === 'editor';
+
+    if (!canUpload) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Only editors can upload files to this shared folder.',
+      });
+    }
+
+    const { originalName, mimeType, encryptedFileKey, iv, searchTokens } = req.body;
+    const tempFilePath = req.file.path;
+    const encryptedSize = req.file.size;
+    const s3ObjectKey = `vault-${uuidv4()}-${Date.now()}.bin`;
+
+    await storageService.uploadFile(s3ObjectKey, tempFilePath, mimeType || 'application/octet-stream');
+    const fs = require('fs');
+    fs.unlink(tempFilePath, () => {});
+
+    let parsedFileKey = encryptedFileKey;
+    if (typeof encryptedFileKey === 'string') {
+      try {
+        parsedFileKey = JSON.parse(encryptedFileKey);
+      } catch {
+        parsedFileKey = encryptedFileKey;
+      }
+    }
+
+    let parsedTokens = [];
+    if (searchTokens) {
+      if (Array.isArray(searchTokens)) {
+        parsedTokens = searchTokens;
+      } else if (typeof searchTokens === 'string') {
+        try {
+          parsedTokens = JSON.parse(searchTokens);
+        } catch {
+          parsedTokens = searchTokens.split(',').map((t) => t.trim()).filter(Boolean);
+        }
+      }
+    }
+
+    const uploaderId = authContext?.user?._id || folderLink.createdBy._id;
+
+    const file = await File.create({
+      originalName: (originalName || req.file.originalname || 'Untitled File').trim(),
+      ownerId: uploaderId,
+      folderId: folderLink.folderId._id,
+      s3ObjectKey,
+      encryptedSize,
+      mimeType: mimeType || 'application/octet-stream',
+      encryptedFileKey: parsedFileKey,
+      encryptionAlgorithm: 'AES-256-GCM',
+      iv,
+      status: 'active',
+      currentVersion: 1,
+      searchTokens: parsedTokens,
+    });
+
+    // If uploaded by someone other than the folder owner, grant folder owner access
+    if (folderLink.folderId.ownerId && !folderLink.folderId.ownerId.equals(uploaderId)) {
+      await FilePermission.findOneAndUpdate(
+        { fileId: file._id, userId: folderLink.folderId.ownerId },
+        {
+          role: 'owner',
+          wrappedFileKey: parsedFileKey,
+          grantedBy: uploaderId,
+          allowDownload: true,
+          createdAt: new Date(),
+        },
+        { upsert: true }
+      );
+    }
+
+    await FileVersion.create({
+      fileId: file._id,
+      versionNumber: 1,
+      s3ObjectKey,
+      encryptedSize,
+      mimeType: file.mimeType,
+      iv: file.iv,
+      uploadedBy: uploaderId,
+      changeSummary: 'Uploaded via shared folder link',
+      createdAt: file.createdAt,
+    });
+
+    await auditService.log({
+      fileId: file._id,
+      folderId: folderLink.folderId._id,
+      actorId: uploaderId,
+      action: 'upload',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: {
+        originalName: file.originalName,
+        folderId: folderLink.folderId._id,
+        folderName: folderLink.folderId.name,
+        accessVia: 'shared_folder_link',
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'File uploaded to shared folder successfully.',
+      file: {
+        id: file._id,
+        originalName: file.originalName,
+        encryptedSize: file.encryptedSize,
+        mimeType: file.mimeType,
+        iv: file.iv,
+        currentVersion: file.currentVersion,
+        folderId: file.folderId,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Delete a file in a shared folder via folder share link (Editor role required)
+ */
+const deleteSharedFolderFile = async (req, res, next) => {
+  try {
+    const { token, fileId } = req.params;
+    const folderLink = await FolderShareLink.findOne({ token, isRevoked: false })
+      .populate('folderId')
+      .populate('createdBy', 'name email');
+
+    if (!folderLink || !folderLink.folderId || folderLink.folderId.status === 'deleted') {
+      return res.status(404).json({ success: false, error: 'Shared folder link is invalid or revoked.' });
+    }
+
+    if (folderLink.isDisabled) {
+      return res.status(403).json({ success: false, error: 'This share link has been disabled by the owner.' });
+    }
+
+    if (folderLink.expiresAt && new Date() > folderLink.expiresAt) {
+      return res.status(410).json({ success: false, error: 'This share link has expired.' });
+    }
+
+    const authContext = await getAuthUserOptional(req);
+    const isOwner = authContext?.user?._id && folderLink.createdBy._id.toString() === authContext.user._id.toString();
+    const canDelete = isOwner || folderLink.role === 'editor';
+
+    if (!canDelete) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Editor role required to delete files from this shared folder.',
+      });
+    }
+
+    const file = await File.findOne({
+      _id: fileId,
+      folderId: folderLink.folderId._id,
+      status: 'active',
+    });
+
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found in this shared folder.' });
+    }
+
+    file.status = 'deleted';
+    await file.save();
+
+    await storageService.deleteFile(file.s3ObjectKey);
+
+    const actorId = authContext?.user?._id || folderLink.createdBy._id;
+
+    await auditService.log({
+      fileId: file._id,
+      folderId: folderLink.folderId._id,
+      actorId,
+      action: 'delete',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: {
+        originalName: file.originalName,
+        folderId: folderLink.folderId._id,
+        folderName: folderLink.folderId.name,
+        accessVia: 'shared_folder_link',
+        actionDetail: `Deleted file "${file.originalName}" from shared folder "${folderLink.folderId.name}"`,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'File deleted from shared folder successfully.',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createShareLink,
   listShareLinks,
@@ -792,5 +1063,7 @@ module.exports = {
   accessShareLink,
   downloadShareLinkFile,
   updateSharedLinkFile,
+  uploadSharedFolderFile,
+  deleteSharedFolderFile,
   rotateKey,
 };

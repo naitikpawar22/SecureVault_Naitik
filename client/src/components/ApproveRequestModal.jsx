@@ -1,25 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import {
   unwrapFileKey,
   wrapFileKeyForRecipient,
-  exportFileKeyToBase64,
 } from '../utils/crypto';
 import {
   CheckCircle2,
   XCircle,
   Shield,
-  Lock,
-  User,
-  Clock,
-  Download,
+  UserX,
   AlertCircle,
   Loader2,
   X,
   FileText,
   Folder,
   KeyRound,
+  Save,
+  Check,
 } from 'lucide-react';
 
 export default function ApproveRequestModal({
@@ -29,7 +27,7 @@ export default function ApproveRequestModal({
   onSuccess,
 }) {
   const { privateKey, unlockPrivateKey } = useAuth();
-  const [role, setRole] = useState(request?.requestedRole || 'viewer');
+  const [role, setRole] = useState('viewer');
   const [allowDownload, setAllowDownload] = useState(true);
   const [expiresOption, setExpiresOption] = useState('never');
   const [customDate, setCustomDate] = useState('');
@@ -42,15 +40,60 @@ export default function ApproveRequestModal({
   const [unlocking, setUnlocking] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState('');
+
+  const isApproved = request?.status === 'approved';
+  const isRevoked = request?.status === 'revoked';
+  const isRejected = request?.status === 'rejected';
+
+  useEffect(() => {
+    if (request) {
+      setRole(request.grantedRole || request.requestedRole || 'viewer');
+      setAllowDownload(request.allowDownload !== undefined ? Boolean(request.allowDownload) : true);
+      if (request.expiresAt) {
+        setExpiresOption('custom');
+        setCustomDate(new Date(request.expiresAt).toISOString().slice(0, 16));
+      } else {
+        setExpiresOption('never');
+        setCustomDate('');
+      }
+      setError('');
+      setShowRejectForm(false);
+      setNeedsUnlock(false);
+      setUnlockPassword('');
+    }
+  }, [request]);
 
   if (!isOpen || !request) return null;
 
   const itemName = request.itemName || (request.targetType === 'file' ? request.file?.originalName : request.folder?.name);
 
-  const handleApprove = async () => {
+  // Recursively collect all files in a folder and its subfolders
+  const collectFolderFiles = async (folderId) => {
+    let list = [];
+    try {
+      const res = await api.files.list({ folderId });
+      if (res && res.files) {
+        list = list.concat(res.files);
+      }
+      const subRes = await api.folders.list(folderId);
+      if (subRes && subRes.folders) {
+        for (const sub of subRes.folders) {
+          const childFiles = await collectFolderFiles(sub.id);
+          list = list.concat(childFiles);
+        }
+      }
+    } catch (e) {
+      console.warn('Error collecting folder files:', e);
+    }
+    return list;
+  };
+
+  const handleSave = async () => {
     setLoading(true);
     setError('');
+    setLoadingStatus('Preparing encryption credentials...');
 
     try {
       let finalExpiresAt = null;
@@ -63,63 +106,134 @@ export default function ApproveRequestModal({
         finalExpiresAt = d.toISOString();
       }
 
-      let wrappedFileKey = null;
+      let activePrivKey = privateKey;
 
-      // For a file, wrap the encryption key for the recipient using ECDH zero-knowledge
-      if (request.targetType === 'file' && request.file) {
-        let activePrivKey = privateKey;
-
-        // If private key not in memory, prompt unlock
-        if (!activePrivKey) {
-          if (!unlockPassword) {
-            setNeedsUnlock(true);
-            setLoading(false);
-            return;
-          }
-          setUnlocking(true);
-          try {
-            activePrivKey = await unlockPrivateKey(unlockPassword);
-            setNeedsUnlock(false);
-          } catch (unlockErr) {
-            setError(unlockErr.message || 'Incorrect password to unlock encryption key.');
-            setLoading(false);
-            setUnlocking(false);
-            return;
-          } finally {
-            setUnlocking(false);
-          }
+      // If private key not in memory, unlock with password
+      if (!activePrivKey) {
+        if (!unlockPassword) {
+          setNeedsUnlock(true);
+          setLoading(false);
+          setLoadingStatus('');
+          return;
         }
+        setUnlocking(true);
+        setLoadingStatus('Unlocking master private key...');
+        try {
+          activePrivKey = await unlockPrivateKey(unlockPassword);
+          setNeedsUnlock(false);
+        } catch (unlockErr) {
+          setError(unlockErr.message || 'Incorrect password to unlock encryption key.');
+          setLoading(false);
+          setUnlocking(false);
+          setLoadingStatus('');
+          return;
+        } finally {
+          setUnlocking(false);
+        }
+      }
 
-        // Wrap file key for recipient
-        if (activePrivKey && request.requester?.publicKey && request.file.encryptedFileKey) {
+      const recipientPubKey = request.requester?.publicKey;
+      let wrappedFileKey = null;
+      let wrappedFileKeys = [];
+
+      // Zero-Knowledge ECDH key wrapping for recipient
+      if (activePrivKey && recipientPubKey) {
+        if (request.targetType === 'file') {
+          setLoadingStatus('Wrapping file encryption key for recipient...');
+          const fileId = request.file?._id || request.file?.id || request.targetId;
           try {
-            const rawFek = await unwrapFileKey(request.file.encryptedFileKey, activePrivKey);
-            wrappedFileKey = await wrapFileKeyForRecipient(rawFek, request.requester.publicKey);
+            const fileMeta = await api.files.get(fileId);
+            const rawKey = fileMeta.file?.wrappedFileKey || fileMeta.file?.encryptedFileKey || request.file?.encryptedFileKey;
+            if (rawKey) {
+              const rawFek = await unwrapFileKey(rawKey, activePrivKey);
+              wrappedFileKey = await wrapFileKeyForRecipient(rawFek, recipientPubKey);
+            }
           } catch (wrapErr) {
-            console.warn('Could not wrap key with ECDH, using fallback:', wrapErr);
+            console.warn('Could not wrap key with ECDH:', wrapErr);
+          }
+        } else if (request.targetType === 'folder') {
+          setLoadingStatus('Scanning folder and encrypting keys for all files...');
+          const folderId = request.folder?._id || request.folder?.id || request.targetId || request.folderId;
+          const folderFiles = await collectFolderFiles(folderId);
+
+          if (folderFiles.length > 0) {
+            setLoadingStatus(`Wrapping keys for ${folderFiles.length} file(s) in folder...`);
+            for (const f of folderFiles) {
+              try {
+                const fileMeta = await api.files.get(f.id);
+                const rawKey = fileMeta.file?.wrappedFileKey || fileMeta.file?.encryptedFileKey || f.wrappedFileKey || f.encryptedFileKey;
+                if (rawKey) {
+                  const rawFek = await unwrapFileKey(rawKey, activePrivKey);
+                  const recipientWrapped = await wrapFileKeyForRecipient(rawFek, recipientPubKey);
+                  wrappedFileKeys.push({
+                    fileId: f.id,
+                    wrappedFileKey: recipientWrapped,
+                  });
+                }
+              } catch (err) {
+                console.warn(`Could not re-wrap key for file ${f.originalName || f.id}:`, err);
+              }
+            }
           }
         }
       }
 
-      await api.accessRequests.approve(request.id, {
-        role,
-        allowDownload,
-        expiresAt: finalExpiresAt,
-        wrappedFileKey,
-      });
+      setLoadingStatus('Saving permissions to database...');
+
+      if (isApproved) {
+        await api.accessRequests.update(request.id, {
+          role,
+          allowDownload,
+          expiresAt: finalExpiresAt,
+          wrappedFileKey,
+          wrappedFileKeys,
+        });
+      } else {
+        await api.accessRequests.approve(request.id, {
+          role,
+          allowDownload,
+          expiresAt: finalExpiresAt,
+          wrappedFileKey,
+          wrappedFileKeys,
+        });
+      }
 
       if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
-      setError(err.message || 'Failed to approve request.');
+      setError(err.message || 'Failed to save permissions.');
     } finally {
       setLoading(false);
+      setLoadingStatus('');
+    }
+  };
+
+  const handleRevoke = async () => {
+    const confirmMsg = `Are you sure you want to disable access for ${request.requester?.name || request.requester?.email}?\n\nThey will immediately lose access and will no longer be able to see or open this ${request.targetType}.`;
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setLoadingStatus('Disabling user access and revoking permissions in database...');
+
+    try {
+      await api.accessRequests.revoke(request.id);
+      if (onSuccess) onSuccess();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Failed to disable access.');
+    } finally {
+      setLoading(false);
+      setLoadingStatus('');
     }
   };
 
   const handleReject = async () => {
     setLoading(true);
     setError('');
+    setLoadingStatus('Rejecting access request...');
 
     try {
       await api.accessRequests.reject(request.id, {
@@ -132,6 +246,7 @@ export default function ApproveRequestModal({
       setError(err.message || 'Failed to reject request.');
     } finally {
       setLoading(false);
+      setLoadingStatus('');
     }
   };
 
@@ -141,15 +256,39 @@ export default function ApproveRequestModal({
         {/* Header */}
         <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-100 text-[#1e40af] flex items-center justify-center">
-              <Shield className="w-4 h-4" />
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+              showRejectForm
+                ? 'bg-rose-100 text-rose-700'
+                : isApproved
+                ? 'bg-emerald-100 text-emerald-700'
+                : isRevoked
+                ? 'bg-slate-200 text-slate-700'
+                : 'bg-blue-100 text-[#1e40af]'
+            }`}>
+              {showRejectForm ? (
+                <XCircle className="w-4 h-4" />
+              ) : isApproved ? (
+                <Shield className="w-4 h-4" />
+              ) : isRevoked ? (
+                <UserX className="w-4 h-4" />
+              ) : (
+                <Shield className="w-4 h-4" />
+              )}
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900">
-                {showRejectForm ? 'Reject Access Request' : 'Review Access Request'}
+                {showRejectForm
+                  ? 'Reject Access Request'
+                  : isApproved
+                  ? 'Manage Approved Access'
+                  : isRevoked
+                  ? 'Re-Approve Access (Currently Disabled)'
+                  : isRejected
+                  ? 'Re-Approve Access (Currently Rejected)'
+                  : 'Review Access Request'}
               </h3>
               <p className="text-[11px] text-slate-500">
-                {request.targetType === 'file' ? 'Shared File' : 'Shared Folder'}
+                {request.targetType === 'file' ? 'Shared File' : 'Shared Folder'} &bull; {isApproved ? 'Active Access' : 'Access Request'}
               </p>
             </div>
           </div>
@@ -163,7 +302,7 @@ export default function ApproveRequestModal({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           {error && (
             <div className="flex items-start gap-2 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -181,9 +320,22 @@ export default function ApproveRequestModal({
                 <p className="text-xs font-bold text-slate-900 truncate">{request.requester?.name || 'Unknown User'}</p>
                 <p className="text-[11px] text-slate-500 truncate">{request.requester?.email}</p>
               </div>
-              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-50 text-blue-700 border border-blue-200 uppercase">
-                {request.requestedRole} Requested
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full border uppercase ${
+                  isApproved
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : isRevoked
+                    ? 'bg-slate-100 text-slate-700 border-slate-300'
+                    : isRejected
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}>
+                  {request.status}
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  Requested: <span className="font-semibold text-slate-700 uppercase">{request.requestedRole}</span>
+                </span>
+              </div>
             </div>
 
             <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-600">
@@ -204,19 +356,21 @@ export default function ApproveRequestModal({
           </div>
 
           {!showRejectForm ? (
-            /* Approve Form */
+            /* Permissions Form */
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                {/* Final Role */}
+                {/* Role Switcher */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Grant Access Role:</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Permission Role:
+                  </label>
                   <select
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
-                    className="w-full text-xs py-2 px-3 border border-slate-300 rounded-xl bg-white focus:outline-hidden focus:border-[#1e40af]"
+                    className="w-full text-xs py-2 px-3 border border-slate-300 rounded-xl bg-white focus:outline-hidden focus:border-[#1e40af] font-semibold text-slate-800"
                   >
-                    <option value="viewer">View Only (Preview)</option>
-                    <option value="editor">Editor (View, Edit & Update)</option>
+                    <option value="viewer">Viewer (View & Preview Only)</option>
+                    <option value="editor">Editor (View, Edit & Upload)</option>
                   </select>
                 </div>
 
@@ -239,7 +393,7 @@ export default function ApproveRequestModal({
 
               {expiresOption === 'custom' && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Custom Expiration Date:</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Custom Expiration Date & Time:</label>
                   <input
                     type="datetime-local"
                     value={customDate}
@@ -254,63 +408,94 @@ export default function ApproveRequestModal({
                 <div>
                   <p className="text-xs font-semibold text-slate-800">Download Permissions</p>
                   <p className="text-[11px] text-slate-500">
-                    {allowDownload ? 'Recipient can download the file to device' : 'Recipient can only preview in browser'}
+                    {allowDownload ? 'Recipient can download the file to their device' : 'Recipient can only preview in browser (no download)'}
                   </p>
                 </div>
                 <input
                   type="checkbox"
                   checked={allowDownload}
                   onChange={(e) => setAllowDownload(e.target.checked)}
-                  className="w-4 h-4 text-[#1e40af] rounded-sm focus:ring-[#1e40af]"
+                  className="w-4 h-4 text-[#1e40af] rounded-sm focus:ring-[#1e40af] cursor-pointer"
                 />
               </div>
 
-              {/* Key Unlock if needed */}
-              {(!privateKey || needsUnlock) && request.targetType === 'file' && (
+              {/* Master Password Unlock if privateKey not in memory */}
+              {(!privateKey || needsUnlock) && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-xs">
                   <div className="flex items-center gap-2 text-amber-900 font-semibold">
-                    <KeyRound className="w-4 h-4 text-amber-700" />
-                    <span>Master Password Required for Zero-Knowledge Key Wrapping</span>
+                    <KeyRound className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Master Password Required for End-to-End Key Encryption</span>
                   </div>
                   <p className="text-[11px] text-slate-600">
-                    Your private key will wrap the file key securely for the recipient's public key in browser memory.
+                    Your password unlocks your private key in memory to securely re-wrap the file encryption keys for {request.requester?.name || 'this recipient'}.
                   </p>
                   <input
                     type="password"
                     placeholder="Enter your account password"
                     value={unlockPassword}
                     onChange={(e) => setUnlockPassword(e.target.value)}
-                    className="w-full text-xs py-2 px-3 border border-amber-300 rounded-lg bg-white"
+                    className="w-full text-xs py-2 px-3 border border-amber-300 rounded-lg bg-white focus:outline-hidden focus:border-amber-500"
                   />
                 </div>
               )}
 
+              {loadingStatus && (
+                <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 p-2.5 rounded-xl border border-blue-100">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+                  <span>{loadingStatus}</span>
+                </div>
+              )}
+
               {/* Action Buttons */}
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowRejectForm(true)}
-                  className="px-3.5 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors"
-                >
-                  Reject Request...
-                </button>
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                {isApproved ? (
+                  <button
+                    type="button"
+                    onClick={handleRevoke}
+                    disabled={loading}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors disabled:opacity-50"
+                  >
+                    <UserX className="w-3.5 h-3.5" />
+                    <span>Disable Access</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowRejectForm(true)}
+                    disabled={loading}
+                    className="px-3.5 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors disabled:opacity-50"
+                  >
+                    Reject Request...
+                  </button>
+                )}
 
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={onClose}
-                    className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                    disabled={loading}
+                    className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    onClick={handleApprove}
+                    onClick={handleSave}
                     disabled={loading || unlocking}
-                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                    className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white rounded-xl shadow-xs transition-colors disabled:opacity-50 ${
+                      isApproved
+                        ? 'bg-[#1e40af] hover:bg-blue-800'
+                        : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
                   >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                    <span>Approve Access</span>
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : isApproved ? (
+                      <Save className="w-4 h-4" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4" />
+                    )}
+                    <span>{isApproved ? 'Save Permissions' : isRevoked || isRejected ? 'Restore & Approve' : 'Approve Access'}</span>
                   </button>
                 </div>
               </div>
@@ -337,7 +522,7 @@ export default function ApproveRequestModal({
                   onClick={() => setShowRejectForm(false)}
                   className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100"
                 >
-                  Back to Approval
+                  Back to Permissions
                 </button>
 
                 <div className="flex items-center gap-2">

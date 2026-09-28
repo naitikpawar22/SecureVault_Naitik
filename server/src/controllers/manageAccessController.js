@@ -138,6 +138,13 @@ const updateFileRecipientPermission = async (req, res, next) => {
 
     await permission.save();
 
+    // Keep AccessRequest in sync
+    const arUpdate = {};
+    if (role) arUpdate.grantedRole = role;
+    if (typeof allowDownload === 'boolean') arUpdate.allowDownload = allowDownload;
+    if (expiresAt !== undefined) arUpdate.expiresAt = expiresAt ? new Date(expiresAt) : null;
+    await AccessRequest.updateMany({ fileId: file._id, requesterId: userId }, { $set: arUpdate });
+
     // Notify recipient of permission change
     await Notification.create({
       userId,
@@ -407,7 +414,39 @@ const updateFolderRecipientPermission = async (req, res, next) => {
       if (expiresAt !== undefined) updateData.expiresAt = expiresAt ? new Date(expiresAt) : null;
 
       await FilePermission.updateMany({ fileId: { $in: fileIds }, userId }, { $set: updateData });
+
+      // Upsert wrappedFileKeys if provided
+      const { wrappedFileKeys } = req.body;
+      if (Array.isArray(wrappedFileKeys) && wrappedFileKeys.length > 0) {
+        for (const item of wrappedFileKeys) {
+          if (item.fileId && item.wrappedFileKey) {
+            let key = item.wrappedFileKey;
+            if (typeof key === 'string') {
+              try { key = JSON.parse(key); } catch {}
+            }
+            await FilePermission.findOneAndUpdate(
+              { fileId: item.fileId, userId },
+              {
+                role: role || folder.sharedWith[swIndex].role,
+                wrappedFileKey: key,
+                grantedBy: req.user._id,
+                allowDownload: folder.sharedWith[swIndex].allowDownload,
+                expiresAt: folder.sharedWith[swIndex].expiresAt,
+                isRevoked: false,
+              },
+              { upsert: true, new: true }
+            );
+          }
+        }
+      }
     }
+
+    // Keep AccessRequest in sync
+    const arUpdate = {};
+    if (role) arUpdate.grantedRole = role;
+    if (typeof allowDownload === 'boolean') arUpdate.allowDownload = allowDownload;
+    if (expiresAt !== undefined) arUpdate.expiresAt = expiresAt ? new Date(expiresAt) : null;
+    await AccessRequest.updateMany({ folderId: folder._id, requesterId: userId }, { $set: arUpdate });
 
     await auditService.log({
       folderId: folder._id,

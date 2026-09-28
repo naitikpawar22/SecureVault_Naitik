@@ -314,13 +314,7 @@ const approveRequest = async (req, res, next) => {
       return res.status(403).json({ success: false, error: 'Access denied. Only the owner can approve this request.' });
     }
 
-    if (request.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        error: `Request has already been processed with status: ${request.status}`,
-      });
-    }
-
+    // Allow approving pending requests, re-approving revoked/rejected requests, or updating existing approved requests
     const finalRole = role === 'editor' ? 'editor' : 'viewer';
     const finalDownload = Boolean(allowDownload);
     const finalExpiresAt = expiresAt ? new Date(expiresAt) : null;
@@ -547,10 +541,290 @@ const rejectRequest = async (req, res, next) => {
   }
 };
 
+/**
+ * Owner updates granted role or settings for an access request (e.g. Viewer <-> Editor)
+ */
+const updateRequestPermission = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role, allowDownload, expiresAt, wrappedFileKey, wrappedFileKeys } = req.body;
+
+    const request = await AccessRequest.findById(id)
+      .populate('fileId')
+      .populate('folderId')
+      .populate('requesterId', 'name email');
+
+    if (!request) {
+      return res.status(404).json({ success: false, error: 'Access request not found.' });
+    }
+
+    if (request.ownerId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Access denied. Only the owner can modify this access request.' });
+    }
+
+    const finalRole = role === 'editor' ? 'editor' : 'viewer';
+    const finalDownload = typeof allowDownload === 'boolean' ? allowDownload : (request.allowDownload !== false);
+    const finalExpiresAt = expiresAt !== undefined ? (expiresAt ? new Date(expiresAt) : null) : request.expiresAt;
+
+    let itemName = '';
+
+    if (request.targetType === 'file' && request.fileId) {
+      const file = request.fileId;
+      itemName = file.originalName;
+
+      const updateData = {
+        role: finalRole,
+        allowDownload: finalDownload,
+        expiresAt: finalExpiresAt,
+        isRevoked: false,
+      };
+
+      if (wrappedFileKey) {
+        let parsedKey = wrappedFileKey;
+        if (typeof wrappedFileKey === 'string') {
+          try { parsedKey = JSON.parse(wrappedFileKey); } catch { parsedKey = wrappedFileKey; }
+        }
+        updateData.wrappedFileKey = parsedKey;
+      }
+
+      await FilePermission.findOneAndUpdate(
+        { fileId: file._id, userId: request.requesterId._id },
+        { $set: updateData },
+        { upsert: true, new: true }
+      );
+    } else if (request.targetType === 'folder' && request.folderId) {
+      const folder = request.folderId;
+      itemName = folder.name;
+
+      const existingIdx = folder.sharedWith.findIndex(
+        (sw) => sw.userId.toString() === request.requesterId._id.toString()
+      );
+      if (existingIdx >= 0) {
+        folder.sharedWith[existingIdx].role = finalRole;
+        folder.sharedWith[existingIdx].allowDownload = finalDownload;
+        folder.sharedWith[existingIdx].expiresAt = finalExpiresAt;
+      } else {
+        folder.sharedWith.push({
+          userId: request.requesterId._id,
+          role: finalRole,
+          allowDownload: finalDownload,
+          expiresAt: finalExpiresAt,
+          grantedBy: req.user._id,
+          createdAt: new Date(),
+        });
+      }
+      await folder.save();
+
+      // Cascade folder permissions to descendant subfolders
+      const descendantIds = await getAllDescendantFolderIds(folder._id);
+      if (descendantIds.length > 0) {
+        const subfolders = await Folder.find({ _id: { $in: descendantIds }, status: 'active' });
+        for (const sub of subfolders) {
+          const subIdx = sub.sharedWith.findIndex(
+            (sw) => sw.userId.toString() === request.requesterId._id.toString()
+          );
+          if (subIdx >= 0) {
+            sub.sharedWith[subIdx].role = finalRole;
+            sub.sharedWith[subIdx].allowDownload = finalDownload;
+            sub.sharedWith[subIdx].expiresAt = finalExpiresAt;
+          } else {
+            sub.sharedWith.push({
+              userId: request.requesterId._id,
+              role: finalRole,
+              allowDownload: finalDownload,
+              expiresAt: finalExpiresAt,
+              grantedBy: req.user._id,
+            });
+          }
+          await sub.save();
+        }
+      }
+
+      // Update all existing files in this folder and descendant subfolders
+      const allFolderIds = [folder._id, ...descendantIds];
+      const files = await File.find({ folderId: { $in: allFolderIds }, status: 'active' });
+      const fileIds = files.map((f) => f._id);
+      await FilePermission.updateMany(
+        { fileId: { $in: fileIds }, userId: request.requesterId._id },
+        { $set: { role: finalRole, allowDownload: finalDownload, expiresAt: finalExpiresAt, isRevoked: false } }
+      );
+
+      // If wrapped keys were passed, upsert them
+      if (Array.isArray(wrappedFileKeys) && wrappedFileKeys.length > 0) {
+        for (const item of wrappedFileKeys) {
+          if (item.fileId && item.wrappedFileKey) {
+            let key = item.wrappedFileKey;
+            if (typeof key === 'string') {
+              try { key = JSON.parse(key); } catch {}
+            }
+            await FilePermission.findOneAndUpdate(
+              { fileId: item.fileId, userId: request.requesterId._id },
+              {
+                role: finalRole,
+                wrappedFileKey: key,
+                grantedBy: req.user._id,
+                allowDownload: finalDownload,
+                expiresAt: finalExpiresAt,
+                isRevoked: false,
+                createdAt: new Date(),
+              },
+              { upsert: true, new: true }
+            );
+          }
+        }
+      }
+    }
+
+    request.grantedRole = finalRole;
+    request.allowDownload = finalDownload;
+    request.expiresAt = finalExpiresAt;
+    if (request.status === 'revoked' || request.status === 'rejected') {
+      request.status = 'approved';
+    }
+    await request.save();
+
+    // Notify recipient
+    await Notification.create({
+      userId: request.requesterId._id,
+      type: 'permission_changed',
+      title: 'Permissions Updated',
+      message: `Your permissions for "${itemName}" have been changed to ${finalRole} (${finalDownload ? 'downloads enabled' : 'downloads blocked'}).`,
+      fileId: request.targetType === 'file' ? request.fileId?._id : null,
+      folderId: request.targetType === 'folder' ? request.folderId?._id : null,
+      accessRequestId: request._id,
+    });
+
+    await auditService.log({
+      fileId: request.targetType === 'file' ? request.fileId?._id : null,
+      folderId: request.targetType === 'folder' ? request.folderId?._id : null,
+      actorId: req.user._id,
+      action: 'permission_changed',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: {
+        requestId: request._id,
+        recipientEmail: request.requesterId.email,
+        role: finalRole,
+        allowDownload: finalDownload,
+        expiresAt: finalExpiresAt,
+        itemName,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Permission updated to ${finalRole} for ${request.requesterId.email}.`,
+      request,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Owner disables/revokes access for an approved requester
+ */
+const revokeRequestAccess = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const request = await AccessRequest.findById(id)
+      .populate('fileId')
+      .populate('folderId')
+      .populate('requesterId', 'name email');
+
+    if (!request) {
+      return res.status(404).json({ success: false, error: 'Access request not found.' });
+    }
+
+    if (request.ownerId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Access denied. Only the owner can revoke access.' });
+    }
+
+    let itemName = '';
+
+    if (request.targetType === 'file' && request.fileId) {
+      itemName = request.fileId.originalName;
+      await FilePermission.deleteMany({
+        fileId: request.fileId._id,
+        userId: request.requesterId._id,
+      });
+      await AccessRequest.updateMany(
+        { fileId: request.fileId._id, requesterId: request.requesterId._id },
+        { $set: { status: 'revoked' } }
+      );
+    } else if (request.targetType === 'folder' && request.folderId) {
+      const folder = request.folderId;
+      itemName = folder.name;
+      folder.sharedWith = folder.sharedWith.filter(
+        (sw) => sw.userId.toString() !== request.requesterId._id.toString()
+      );
+      await folder.save();
+
+      const descendantFolderIds = await getAllDescendantFolderIds(folder._id);
+      if (descendantFolderIds.length > 0) {
+        await Folder.updateMany(
+          { _id: { $in: descendantFolderIds } },
+          { $pull: { sharedWith: { userId: request.requesterId._id } } }
+        );
+      }
+
+      const allFolderIds = [folder._id, ...descendantFolderIds];
+      const files = await File.find({ folderId: { $in: allFolderIds }, status: 'active' });
+      const fileIds = files.map((f) => f._id);
+      await FilePermission.deleteMany({
+        fileId: { $in: fileIds },
+        userId: request.requesterId._id,
+      });
+      await AccessRequest.updateMany(
+        { folderId: { $in: allFolderIds }, requesterId: request.requesterId._id },
+        { $set: { status: 'revoked' } }
+      );
+    }
+
+    request.status = 'revoked';
+    request.respondedAt = new Date();
+    await request.save();
+
+    await Notification.create({
+      userId: request.requesterId._id,
+      type: 'access_revoked',
+      title: 'Access Disabled',
+      message: `Your access to "${itemName || 'the shared item'}" has been disabled by the owner.`,
+      fileId: request.targetType === 'file' ? request.fileId?._id : null,
+      folderId: request.targetType === 'folder' ? request.folderId?._id : null,
+      accessRequestId: request._id,
+    });
+
+    await auditService.log({
+      fileId: request.targetType === 'file' ? request.fileId?._id : null,
+      folderId: request.targetType === 'folder' ? request.folderId?._id : null,
+      actorId: req.user._id,
+      action: 'access_revoked',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      metadata: {
+        requestId: request._id,
+        recipientEmail: request.requesterId.email,
+        itemName,
+        note: 'Owner disabled access for this user.',
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Access disabled for ${request.requesterId.email}. User can no longer see or access this item.`,
+      request,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createAccessRequest,
   getRequestStatusForToken,
   listOwnerRequests,
   approveRequest,
   rejectRequest,
+  updateRequestPermission,
+  revokeRequestAccess,
 };

@@ -37,8 +37,54 @@ const checkFileAccess = (requiredRole = 'viewer') => {
         return next();
       }
 
-      // If owner is strictly required (e.g. for sharing, revoking, deleting)
+      // Check if file is inside a parent folder with permissions
+      let parentFolder = null;
+      let folderRole = null;
+      if (file.folderId) {
+        parentFolder = await Folder.findOne({
+          _id: file.folderId,
+          status: 'active',
+          $or: [
+            { ownerId: userId },
+            { 'sharedWith.userId': userId },
+          ],
+        });
+
+        if (parentFolder) {
+          req.parentFolder = parentFolder;
+          if (parentFolder.ownerId.equals(userId)) {
+            folderRole = 'owner';
+          } else {
+            const sw = parentFolder.sharedWith.find((s) => s.userId.toString() === userId.toString());
+            if (sw && (!sw.expiresAt || new Date() <= sw.expiresAt)) {
+              folderRole = sw.role; // 'editor' or 'viewer'
+            }
+          }
+        }
+      }
+
+      // Check for deletion permission (Owner or Folder Editor)
+      if (requiredRole === 'delete') {
+        if (folderRole === 'owner' || folderRole === 'editor') {
+          req.fileDoc = file;
+          req.userRole = folderRole;
+          req.wrappedFileKey = file.encryptedFileKey;
+          return next();
+        }
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. Only the file owner or folder editor can delete this file.',
+        });
+      }
+
+      // If owner is strictly required (e.g. for sharing, revoking)
       if (requiredRole === 'owner') {
+        if (folderRole === 'owner') {
+          req.fileDoc = file;
+          req.userRole = 'owner';
+          req.wrappedFileKey = file.encryptedFileKey;
+          return next();
+        }
         return res.status(403).json({
           success: false,
           error: 'Access denied. Only the file owner can perform this operation.',
@@ -52,25 +98,13 @@ const checkFileAccess = (requiredRole = 'viewer') => {
         isRevoked: { $ne: true },
       });
 
-      // If not directly in FilePermission, check if user has access via parent Folder
-      if (!permission && file.folderId) {
-        const parentFolder = await Folder.findOne({
-          _id: file.folderId,
-          status: 'active',
-          'sharedWith.userId': userId,
-        });
-
-        if (parentFolder) {
-          const sw = parentFolder.sharedWith.find((s) => s.userId.toString() === userId.toString());
-          if (sw && (!sw.expiresAt || new Date() <= sw.expiresAt)) {
-            permission = {
-              role: sw.role,
-              allowDownload: sw.allowDownload !== false,
-              expiresAt: sw.expiresAt,
-              wrappedFileKey: file.encryptedFileKey,
-            };
-          }
-        }
+      // If not directly in FilePermission, use folder permission
+      if (!permission && folderRole) {
+        permission = {
+          role: folderRole,
+          allowDownload: true,
+          wrappedFileKey: file.encryptedFileKey,
+        };
       }
 
       if (!permission) {
@@ -90,7 +124,7 @@ const checkFileAccess = (requiredRole = 'viewer') => {
       }
 
       // If editor role is required, ensure user has editor permission
-      if (requiredRole === 'editor' && permission.role !== 'editor') {
+      if (requiredRole === 'editor' && permission.role !== 'editor' && folderRole !== 'editor') {
         return res.status(403).json({
           success: false,
           error: 'Access denied. Edit permission required to perform this action.',
@@ -98,9 +132,9 @@ const checkFileAccess = (requiredRole = 'viewer') => {
       }
 
       req.fileDoc = file;
-      req.userRole = permission.role;
+      req.userRole = permission.role || folderRole || 'viewer';
       req.permissionDoc = permission;
-      req.wrappedFileKey = permission.wrappedFileKey;
+      req.wrappedFileKey = permission.wrappedFileKey || file.encryptedFileKey;
       return next();
     } catch (err) {
       next(err);

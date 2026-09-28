@@ -15,6 +15,7 @@ import AccessRequestsPage from './pages/AccessRequestsPage';
 import NotificationsDropdown from './components/NotificationsDropdown';
 import UploadCornerWidget from './components/UploadCornerWidget';
 import MfaModal from './components/MfaModal';
+import NewFolderModal from './components/NewFolderModal';
 import { useUpload } from './context/UploadContext';
 import {
   Loader2,
@@ -25,7 +26,12 @@ import {
   KeyRound,
   ShieldCheck,
   Smartphone,
+  Home,
+  Users,
+  Clock,
+  Lock,
 } from 'lucide-react';
+
 
 export default function App() {
   const { isAuthenticated, loading, user, privateKey, updateUser } = useAuth();
@@ -39,6 +45,35 @@ export default function App() {
   const [showMfaModal, setShowMfaModal] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [currentFolderName, setCurrentFolderName] = useState(null);
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+  const [folderRefreshTrigger, setFolderRefreshTrigger] = useState(0);
+
+  useEffect(() => {
+    setCurrentFolderId(null);
+    setCurrentFolderName(null);
+  }, [activeTab]);
+
+  const handleCreateFolder = async (folderName) => {
+    try {
+      const res = await api.folders.create({
+        name: folderName,
+        parentId: currentFolderId,
+      });
+      setShowNewFolderModal(false);
+      if (res && res.folder && res.folder.id) {
+        // Open the newly created folder immediately without error
+        setCurrentFolderId(res.folder.id);
+        setCurrentFolderName(res.folder.name);
+      }
+      setFolderRefreshTrigger((prev) => prev + 1);
+      window.dispatchEvent(new CustomEvent('vault:refresh-view', { detail: { folderId: res?.folder?.id || currentFolderId } }));
+    } catch (err) {
+      alert(err.message || 'Failed to create folder');
+      throw err;
+    }
+  };
 
   // Unread badge for "Shared with me"
   const checkUnreadShared = async () => {
@@ -225,14 +260,17 @@ export default function App() {
           unreadSharedCount={unreadSharedCount}
           pendingRequestsCount={pendingRequestsCount}
           onUnlockKey={() => setShowUnlockModal(true)}
-          onNewFolder={() => window.dispatchEvent(new CustomEvent('vault:new-folder'))}
+          onNewFolder={() => {
+            if (activeTab !== 'files') setActiveTab('files');
+            setShowNewFolderModal(true);
+          }}
           onFileUpload={(files) => {
-            setActiveTab('files');
-            uploadFiles(files);
+            if (activeTab !== 'files') setActiveTab('files');
+            uploadFiles(files, currentFolderId, () => setFolderRefreshTrigger((prev) => prev + 1));
           }}
           onFolderUpload={(files) => {
-            setActiveTab('files');
-            uploadFolder(files);
+            if (activeTab !== 'files') setActiveTab('files');
+            uploadFolder(files, currentFolderId, () => setFolderRefreshTrigger((prev) => prev + 1));
           }}
         />
       </div>
@@ -270,61 +308,70 @@ export default function App() {
               onCloseMobile={() => setMobileSidebarOpen(false)}
               onNewFolder={() => {
                 setMobileSidebarOpen(false);
-                window.dispatchEvent(new CustomEvent('vault:new-folder'));
+                if (activeTab !== 'files') setActiveTab('files');
+                setShowNewFolderModal(true);
               }}
               onFileUpload={(files) => {
                 setMobileSidebarOpen(false);
-                setActiveTab('files');
-                uploadFiles(files);
+                if (activeTab !== 'files') setActiveTab('files');
+                uploadFiles(files, currentFolderId, () => setFolderRefreshTrigger((prev) => prev + 1));
               }}
               onFolderUpload={(files) => {
                 setMobileSidebarOpen(false);
-                setActiveTab('files');
-                uploadFolder(files);
+                if (activeTab !== 'files') setActiveTab('files');
+                uploadFolder(files, currentFolderId, () => setFolderRefreshTrigger((prev) => prev + 1));
               }}
             />
           </div>
         </div>
       )}
 
+
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
         {/* Top Header Bar */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-200/90 px-4 sm:px-8 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 flex-1 max-w-xl">
+        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b-2 border-slate-300 px-3 sm:px-6 md:px-8 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4 shadow-xs">
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-xl min-w-0">
             {/* Mobile Hamburger Button */}
             <button
               type="button"
               onClick={() => setMobileSidebarOpen(true)}
-              className="p-2 -ml-2 text-slate-600 hover:text-slate-900 md:hidden rounded-lg hover:bg-slate-100"
+              className="p-2 -ml-1 text-slate-800 hover:text-slate-950 md:hidden rounded-xl border border-slate-300 hover:bg-slate-100 transition-colors shrink-0"
+              title="Open Navigation Menu"
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-5 h-5 stroke-[2.5]" />
             </button>
 
             {/* Global Search Box */}
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+            <div className="relative flex-1 min-w-0">
+              <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500 stroke-[2.5]" />
               <input
                 type="text"
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
-                placeholder="Search in Vault..."
-                className="w-full text-xs pl-9 pr-4 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 focus:outline-hidden focus:border-[#1e40af] focus:ring-1 focus:ring-[#1e40af] transition-all"
+                placeholder="Search files & folders in Vault..."
+                className="w-full text-xs pl-9 pr-3 sm:pr-4 py-2.5 border-2 border-slate-300 rounded-xl bg-slate-50 focus:bg-white text-slate-900 font-bold placeholder:text-slate-500 focus:outline-hidden focus:border-[#1e40af] focus:ring-2 focus:ring-[#1e40af]/20 transition-all shadow-2xs"
               />
             </div>
           </div>
 
-          {/* Right Header: Notifications and Cryptographic Key Status */}
-          <div className="flex items-center space-x-2">
+          {/* Right Header: Security Pill, MFA, Notifications, Unlock Key */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* E2EE Zero-Knowledge Trust Indicator (Desktop) */}
+            <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-950 border-2 border-emerald-300 shadow-2xs">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 stroke-[2.5]" />
+              <span>AES-256 E2EE Active</span>
+            </div>
+
             {/* Join Google Authenticator Button (Only shown if NOT already added) */}
             {!user?.mfaEnabled && (
               <button
                 type="button"
                 onClick={() => setShowMfaModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 transition-colors shadow-2xs"
-                title="Join Google Authenticator 2FA"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 text-amber-950 border-2 border-amber-400 hover:bg-amber-100 transition-colors shadow-2xs"
+                title="Join Google Authenticator (TOTP 2FA)"
               >
-                <Smartphone className="w-3.5 h-3.5 text-amber-700" />
+                <Smartphone className="w-4 h-4 text-amber-800 shrink-0 stroke-[2.5]" />
                 <span className="hidden sm:inline">Join Google Authenticator</span>
               </button>
             )}
@@ -335,22 +382,31 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowUnlockModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 transition-colors shadow-2xs"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 text-amber-950 border-2 border-amber-400 hover:bg-amber-100 transition-colors shadow-2xs"
+                title="Unlock ECDH Private Key"
               >
-                <KeyRound className="w-3.5 h-3.5 text-amber-700" />
-                <span>Unlock Key</span>
+                <KeyRound className="w-4 h-4 text-amber-800 shrink-0 stroke-[2.5]" />
+                <span className="hidden sm:inline">Unlock Key</span>
               </button>
             )}
           </div>
         </header>
 
+
         {/* Workspace Views */}
-        <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-3.5 sm:p-6 md:p-8 max-w-7xl w-full mx-auto pb-24 md:pb-8">
           {activeTab === 'files' ? (
             <DashboardPage
               activeTab="files"
               setActiveTab={setActiveTab}
               onUpdateTotalBytes={setTotalBytes}
+              searchQuery={globalSearch}
+              currentFolderId={currentFolderId}
+              setCurrentFolderId={setCurrentFolderId}
+              currentFolderName={currentFolderName}
+              setCurrentFolderName={setCurrentFolderName}
+              folderRefreshTrigger={folderRefreshTrigger}
+              onOpenNewFolder={() => setShowNewFolderModal(true)}
             />
           ) : activeTab === 'requests' ? (
             <AccessRequestsPage />
@@ -359,6 +415,13 @@ export default function App() {
               activeTab="shared"
               setActiveTab={setActiveTab}
               onUpdateTotalBytes={setTotalBytes}
+              searchQuery={globalSearch}
+              currentFolderId={currentFolderId}
+              setCurrentFolderId={setCurrentFolderId}
+              currentFolderName={currentFolderName}
+              setCurrentFolderName={setCurrentFolderName}
+              folderRefreshTrigger={folderRefreshTrigger}
+              onOpenNewFolder={() => setShowNewFolderModal(true)}
             />
           ) : activeTab === 'audit' ? (
             <AuditPage />
@@ -373,9 +436,92 @@ export default function App() {
               activeTab="files"
               setActiveTab={setActiveTab}
               onUpdateTotalBytes={setTotalBytes}
+              searchQuery={globalSearch}
+              currentFolderId={currentFolderId}
+              setCurrentFolderId={setCurrentFolderId}
+              currentFolderName={currentFolderName}
+              setCurrentFolderName={setCurrentFolderName}
+              folderRefreshTrigger={folderRefreshTrigger}
+              onOpenNewFolder={() => setShowNewFolderModal(true)}
             />
           )}
         </main>
+
+        {/* Mobile Sticky Bottom Navigation Bar (Visible on phones < md) */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t-2 border-slate-300 py-2 px-2 flex items-center justify-around shadow-xl safe-bottom">
+          <button
+            type="button"
+            onClick={() => setActiveTab('files')}
+            className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+              activeTab === 'files'
+                ? 'text-[#1e40af] bg-blue-100/70 border border-blue-200'
+                : 'text-slate-700 hover:text-slate-950'
+            }`}
+          >
+            <Home className="w-5 h-5 mb-0.5 stroke-[2.5]" />
+            <span>Vault</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('shared')}
+            className={`relative flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+              activeTab === 'shared'
+                ? 'text-[#1e40af] bg-blue-100/70 border border-blue-200'
+                : 'text-slate-700 hover:text-slate-950'
+            }`}
+          >
+            <Users className="w-5 h-5 mb-0.5 stroke-[2.5]" />
+            <span>Shared</span>
+            {unreadSharedCount > 0 && (
+              <span className="absolute top-0.5 right-1 min-w-[18px] h-4.5 px-1 flex items-center justify-center text-[10px] font-bold bg-red-600 text-white rounded-full leading-none shadow-xs">
+                {unreadSharedCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('requests')}
+            className={`relative flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+              activeTab === 'requests'
+                ? 'text-[#1e40af] bg-blue-100/70 border border-blue-200'
+                : 'text-slate-700 hover:text-slate-950'
+            }`}
+          >
+            <KeyRound className="w-5 h-5 mb-0.5 stroke-[2.5]" />
+            <span>Requests</span>
+            {pendingRequestsCount > 0 && (
+              <span className="absolute top-0.5 right-1 min-w-[18px] h-4.5 px-1 flex items-center justify-center text-[10px] font-bold bg-amber-600 text-white rounded-full leading-none shadow-xs">
+                {pendingRequestsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('audit')}
+            className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+              activeTab === 'audit'
+                ? 'text-[#1e40af] bg-blue-100/70 border border-blue-200'
+                : 'text-slate-700 hover:text-slate-950'
+            }`}
+          >
+            <Clock className="w-5 h-5 mb-0.5 stroke-[2.5]" />
+            <span>Activity</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(true)}
+            className="flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[11px] font-bold text-slate-700 hover:text-slate-950 transition-all"
+          >
+            <Menu className="w-5 h-5 mb-0.5 stroke-[2.5]" />
+            <span>More</span>
+          </button>
+        </nav>
+
+
       </div>
 
       {/* Global Unlock Modal */}
@@ -396,6 +542,14 @@ export default function App() {
           updateUser({ mfaEnabled: true, mfaVerified: true });
           setShowMfaModal(false);
         }}
+      />
+
+      {/* Global New Folder Modal */}
+      <NewFolderModal
+        isOpen={showNewFolderModal}
+        onClose={() => setShowNewFolderModal(false)}
+        onCreate={handleCreateFolder}
+        targetFolderName={currentFolderName}
       />
 
       {/* Floating Global Upload Progress Line & Corner Widget across all tabs */}

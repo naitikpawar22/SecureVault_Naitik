@@ -6,6 +6,7 @@ export default function NewMenuButton({
   onFileUpload,
   onFolderUpload,
   className = '',
+  enableShortcuts = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
@@ -23,8 +24,10 @@ export default function NewMenuButton({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Keyboard shortcut support (Alt+C then F/U/I)
+  // Keyboard shortcut support (Alt+C then F/U/I) - only active if enableShortcuts is true
   useEffect(() => {
+    if (!enableShortcuts) return;
+
     let altCPressed = false;
     let timer = null;
 
@@ -63,7 +66,7 @@ export default function NewMenuButton({
       window.removeEventListener('keydown', handleKeyDown);
       clearTimeout(timer);
     };
-  }, [onNewFolder]);
+  }, [enableShortcuts, onNewFolder]);
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -105,15 +108,15 @@ export default function NewMenuButton({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-3 px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-800 rounded-2xl border border-slate-200 shadow-md hover:shadow-lg transition-all duration-150 font-medium text-sm select-none group"
+        className="flex items-center gap-3 px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-900 rounded-2xl border-2 border-slate-300 hover:border-[#1e40af] shadow-md hover:shadow-lg transition-all duration-150 font-bold text-sm select-none group"
       >
-        <Plus className="w-5 h-5 text-slate-700 group-hover:scale-110 transition-transform stroke-[2.5]" />
-        <span className="font-semibold text-slate-900 tracking-tight">New</span>
+        <Plus className="w-5 h-5 text-slate-800 group-hover:scale-110 transition-transform stroke-[2.5]" />
+        <span className="font-bold text-slate-900 tracking-tight">New</span>
       </button>
 
-      {/* The Dropdown Menu matching user photo 2 */}
+      {/* The Dropdown Menu */}
       {isOpen && (
-        <div className="absolute left-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+        <div className="absolute left-0 mt-2 w-56 min-w-[220px] bg-white rounded-2xl shadow-2xl border-2 border-slate-300 py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
           {/* New folder */}
           <button
             type="button"
@@ -121,16 +124,16 @@ export default function NewMenuButton({
               setIsOpen(false);
               if (onNewFolder) onNewFolder();
             }}
-            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-700 transition-colors text-left group"
+            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-800 transition-colors text-left group"
           >
             <div className="flex items-center gap-3">
-              <FolderPlus className="w-4 h-4 text-slate-500 group-hover:text-slate-900" />
-              <span className="font-medium text-slate-800">New folder</span>
+              <FolderPlus className="w-4 h-4 text-slate-600 group-hover:text-[#1e40af]" />
+              <span className="font-bold text-slate-900">New folder</span>
             </div>
-            <span className="text-[11px] text-slate-400 font-mono">Alt+C then F</span>
+            <span className="text-[11px] text-slate-500 font-mono font-semibold">Alt+C then F</span>
           </button>
 
-          <div className="my-1 border-t border-slate-100" />
+          <div className="my-1 border-t border-slate-200" />
 
           {/* File upload */}
           <button
@@ -139,13 +142,13 @@ export default function NewMenuButton({
               setIsOpen(false);
               if (fileInputRef.current) fileInputRef.current.click();
             }}
-            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-700 transition-colors text-left group"
+            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-800 transition-colors text-left group"
           >
             <div className="flex items-center gap-3">
-              <Upload className="w-4 h-4 text-slate-500 group-hover:text-slate-900" />
-              <span className="font-medium text-slate-800">File upload</span>
+              <Upload className="w-4 h-4 text-slate-600 group-hover:text-[#1e40af]" />
+              <span className="font-bold text-slate-900">File upload</span>
             </div>
-            <span className="text-[11px] text-slate-400 font-mono">Alt+C then U</span>
+            <span className="text-[11px] text-slate-500 font-mono font-semibold">Alt+C then U</span>
           </button>
 
           {/* Folder upload */}
@@ -155,16 +158,17 @@ export default function NewMenuButton({
               setIsOpen(false);
               if (folderInputRef.current) folderInputRef.current.click();
             }}
-            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-700 transition-colors text-left group"
+            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-100 text-slate-800 transition-colors text-left group"
           >
             <div className="flex items-center gap-3">
-              <FolderUp className="w-4 h-4 text-slate-500 group-hover:text-slate-900" />
-              <span className="font-medium text-slate-800">Folder upload</span>
+              <FolderUp className="w-4 h-4 text-slate-600 group-hover:text-[#1e40af]" />
+              <span className="font-bold text-slate-900">Folder upload</span>
             </div>
-            <span className="text-[11px] text-slate-400 font-mono">Alt+C then I</span>
+            <span className="text-[11px] text-slate-500 font-mono font-semibold">Alt+C then I</span>
           </button>
         </div>
       )}
+
     </div>
   );
 }

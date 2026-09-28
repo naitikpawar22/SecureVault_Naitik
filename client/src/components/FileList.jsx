@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { unwrapFileKey, decryptFile } from '../utils/crypto';
@@ -33,7 +33,6 @@ import UnlockModal from './UnlockModal';
 import FileCard from './FileCard';
 import FolderCard from './FolderCard';
 import NewMenuButton from './NewMenuButton';
-import NewFolderModal from './NewFolderModal';
 import FolderShareModal from './FolderShareModal';
 import GenerateLinkModal from './GenerateLinkModal';
 import ManageAccessModal from './ManageAccessModal';
@@ -64,7 +63,7 @@ export default function FileList({
   const [deletingId, setDeletingId] = useState(null);
   const [error, setError] = useState('');
   const [showUnlockModal, setShowUnlockModal] = useState(false);
-  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+
 
   // Modals state
   const [previewFile, setPreviewFile] = useState(null);
@@ -377,37 +376,38 @@ export default function FileList({
       )}
 
       {/* Top Controls & Breadcrumbs Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white border border-slate-200 p-3 rounded-xl shadow-2xs">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white border-2 border-slate-300 p-3.5 rounded-2xl shadow-xs">
         {/* Left Side: + New Button & Breadcrumb Navigation */}
         <div className="flex items-center space-x-3 flex-wrap gap-y-2">
           {!isSharedView && (
             <NewMenuButton
-              onNewFolder={() => setShowNewFolderModal(true)}
+              onNewFolder={onNewFolder}
               onFileUpload={onFileUpload}
               onFolderUpload={onFolderUpload}
+              enableShortcuts={false}
             />
           )}
 
-          <nav className="flex items-center space-x-1.5 text-xs text-slate-600 pl-1">
+          <nav className="flex items-center space-x-1.5 text-xs text-slate-700 pl-1 font-bold">
             <button
               type="button"
               onClick={() => onNavigateBreadcrumb && onNavigateBreadcrumb(null)}
-              className="flex items-center gap-1 font-semibold text-slate-800 hover:text-[#1e40af] hover:underline"
+              className="flex items-center gap-1.5 font-bold text-slate-900 hover:text-[#1e40af] hover:underline"
             >
-              <Home className="w-3.5 h-3.5" />
+              <Home className="w-4 h-4 text-slate-700" />
               <span>{isSharedView ? 'Shared Files' : 'Vault Files'}</span>
             </button>
 
             {breadcrumbs && breadcrumbs.map((crumb, idx) => (
               <React.Fragment key={crumb.id || idx}>
-                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 stroke-[2.5]" />
                 <button
                   type="button"
                   onClick={() => onNavigateBreadcrumb && onNavigateBreadcrumb(crumb.id)}
                   className={`truncate max-w-[140px] hover:underline ${
                     idx === breadcrumbs.length - 1
                       ? 'font-bold text-[#1e40af]'
-                      : 'font-medium text-slate-600 hover:text-slate-900'
+                      : 'font-bold text-slate-800 hover:text-slate-900'
                   }`}
                   title={crumb.name}
                 >
@@ -420,42 +420,43 @@ export default function FileList({
 
         {/* Right Side: View Mode Toggle & Total Count */}
         <div className="flex items-center space-x-3 self-end sm:self-auto">
-          <span className="text-[11px] text-slate-500 font-mono">
+          <span className="text-xs font-bold text-slate-800 font-mono bg-slate-100 px-3 py-1 rounded-xl border border-slate-300 shadow-2xs">
             {folders.length > 0 && `${folders.length} ${folders.length === 1 ? 'folder' : 'folders'}, `}
             {files.length} {files.length === 1 ? 'file' : 'files'}
           </span>
 
           {/* Grid vs Table View Toggle */}
-          <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+          <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-300">
             <button
               type="button"
               onClick={() => setViewMode('grid')}
-              className={`p-1.5 rounded-md transition-colors flex items-center gap-1 ${
+              className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 font-bold ${
                 viewMode === 'grid'
-                  ? 'bg-white text-[#1e40af] shadow-xs font-semibold'
-                  : 'text-slate-500 hover:text-slate-900'
+                  ? 'bg-white text-[#1e40af] shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
               title="Grid View (4 Cards per Row)"
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline text-[11px]">Grid</span>
+              <LayoutGrid className="w-4 h-4" />
+              <span className="hidden sm:inline text-xs font-bold">Grid</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('table')}
-              className={`p-1.5 rounded-md transition-colors flex items-center gap-1 ${
+              className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 font-bold ${
                 viewMode === 'table'
-                  ? 'bg-white text-[#1e40af] shadow-xs font-semibold'
-                  : 'text-slate-500 hover:text-slate-900'
+                  ? 'bg-white text-[#1e40af] shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
               title="Table List View"
             >
-              <List className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline text-[11px]">Table</span>
+              <List className="w-4 h-4" />
+              <span className="hidden sm:inline text-xs font-bold">Table</span>
             </button>
           </div>
         </div>
       </div>
+
 
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
@@ -470,8 +471,8 @@ export default function FileList({
           {/* Folders Section (if any folders or ongoing folder uploads) */}
           {((folders && folders.length > 0) || activeFolderUploads.length > 0) && (
             <div className="space-y-2">
-              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                <FolderIcon className="w-3.5 h-3.5 text-blue-600" />
+              <h3 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <FolderIcon className="w-4 h-4 text-blue-600" />
                 <span>Folders ({folders.length + activeFolderUploads.length})</span>
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -502,8 +503,8 @@ export default function FileList({
           {((files && files.length > 0) || activeFileUploads.length > 0) && (
             <div className="space-y-2">
               {((folders && folders.length > 0) || activeFolderUploads.length > 0) && (
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-slate-500" />
+                <h3 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-slate-600" />
                   <span>Files ({files.length + activeFileUploads.length})</span>
                 </h3>
               )}
@@ -540,15 +541,15 @@ export default function FileList({
 
           {/* Empty state if no folders and no files */}
           {!hasItems && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-16 text-center space-y-4">
-              <div className="w-16 h-16 rounded-full bg-blue-50 text-[#1e40af] flex items-center justify-center mx-auto">
-                <FileText className="w-8 h-8 opacity-70" />
+            <div className="bg-white border-2 border-dashed border-slate-300 rounded-2xl p-16 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-blue-50 text-[#1e40af] flex items-center justify-center mx-auto border-2 border-blue-200">
+                <FileText className="w-8 h-8 opacity-90 stroke-[2.2]" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-base font-bold text-slate-900">
                   {currentFolderName ? `"${currentFolderName}" is empty` : 'Your vault is empty'}
                 </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                <p className="text-xs font-semibold text-slate-600 max-w-sm mx-auto">
                   Drag & drop files or folders here, or use the buttons below to encrypt and store data in your private vault.
                 </p>
               </div>
@@ -557,26 +558,26 @@ export default function FileList({
                 <div className="flex flex-wrap items-center justify-center gap-2.5 pt-3">
                   <button
                     type="button"
-                    onClick={() => setShowNewFolderModal(true)}
-                    className="px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors"
+                    onClick={onNewFolder}
+                    className="px-4 py-2.5 bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-900 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
                   >
-                    <Plus className="w-4 h-4 text-slate-600" />
+                    <Plus className="w-4 h-4 text-slate-700 stroke-[2.5]" />
                     <span>New Folder</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => emptyFileInputRef.current?.click()}
-                    className="px-4 py-2.5 bg-[#1e40af] hover:bg-[#1e3a8a] text-white rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors"
+                    className="px-4 py-2.5 bg-[#1e40af] hover:bg-[#1e3a8a] text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
                   >
-                    <Upload className="w-4 h-4" />
+                    <Upload className="w-4 h-4 stroke-[2.5]" />
                     <span>Upload Files</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => emptyFolderInputRef.current?.click()}
-                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors"
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-900 border-2 border-slate-300 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
                   >
-                    <FolderUp className="w-4 h-4 text-slate-600" />
+                    <FolderUp className="w-4 h-4 text-slate-700 stroke-[2.5]" />
                     <span>Upload Folder</span>
                   </button>
                 </div>
@@ -586,19 +587,20 @@ export default function FileList({
         </div>
       ) : (
         /* VIEW MODE 2: Traditional Table View */
-        <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+        <div className="bg-white border-2 border-slate-300 rounded-2xl shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
+              <thead className="bg-slate-100 text-slate-900 font-bold border-b-2 border-slate-300">
                 <tr>
-                  <th className="px-6 py-3">Name</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Size</th>
-                  <th className="px-4 py-3">Encryption</th>
-                  <th className="px-4 py-3">Date</th>
-                  <th className="px-6 py-3 text-right">Actions</th>
+                  <th className="px-6 py-3.5 font-bold text-slate-900 text-xs">Name</th>
+                  <th className="px-4 py-3.5 font-bold text-slate-900 text-xs">Type</th>
+                  <th className="px-4 py-3.5 font-bold text-slate-900 text-xs">Size</th>
+                  <th className="px-4 py-3.5 font-bold text-slate-900 text-xs">Encryption</th>
+                  <th className="px-4 py-3.5 font-bold text-slate-900 text-xs">Date</th>
+                  <th className="px-6 py-3.5 text-right font-bold text-slate-900 text-xs">Actions</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-slate-100 bg-white">
                 {/* Ongoing Uploads in table */}
                 {activeUploads && activeUploads.map((upload) => (
@@ -829,12 +831,7 @@ export default function FileList({
         </div>
       )}
 
-      {/* New Folder Modal */}
-      <NewFolderModal
-        isOpen={showNewFolderModal}
-        onClose={() => setShowNewFolderModal(false)}
-        onCreate={handleCreateFolderSubmit}
-      />
+
 
       {/* Unlock Session Private Key Modal */}
       <UnlockModal

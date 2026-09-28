@@ -16,6 +16,13 @@ export default function DashboardPage({
   activeTab = 'files',
   setActiveTab,
   onUpdateTotalBytes,
+  searchQuery: externalSearchQuery,
+  currentFolderId = null,
+  setCurrentFolderId,
+  currentFolderName = null,
+  setCurrentFolderName,
+  onOpenNewFolder,
+  folderRefreshTrigger = 0,
 }) {
   const { user } = useAuth();
   const { activeUploads, uploadFiles, uploadFolder, dismissUpload } = useUpload();
@@ -23,49 +30,18 @@ export default function DashboardPage({
   const [sharedFiles, setSharedFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [breadcrumbs, setBreadcrumbs] = useState([]);
-  const [currentFolderId, setCurrentFolderId] = useState(null);
-  const [currentFolderName, setCurrentFolderName] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    // Reset folder view when switching between personal and shared tab
-    setCurrentFolderId(null);
-    setCurrentFolderName(null);
-  }, [activeTab]);
+  const activeSearch = (externalSearchQuery !== undefined ? externalSearchQuery : searchQuery) || '';
 
   useEffect(() => {
     loadAll(currentFolderId);
-  }, [currentFolderId, activeTab]);
+  }, [currentFolderId, activeTab, folderRefreshTrigger]);
 
-  // Global listeners for upload and folder creation triggered anywhere in app
-  useEffect(() => {
-    const handleTriggerFiles = (e) => {
-      if (e.detail) handleFileUpload(e.detail);
-    };
-    const handleTriggerFolder = (e) => {
-      if (e.detail) handleFolderUpload(e.detail);
-    };
-    const handleTriggerNewFolder = () => {
-      const folderName = window.prompt('Enter new folder name:');
-      if (folderName && folderName.trim()) {
-        handleNewFolder(folderName.trim());
-      }
-    };
-
-    window.addEventListener('vault:upload-files', handleTriggerFiles);
-    window.addEventListener('vault:upload-folder', handleTriggerFolder);
-    window.addEventListener('vault:new-folder', handleTriggerNewFolder);
-
-    return () => {
-      window.removeEventListener('vault:upload-files', handleTriggerFiles);
-      window.removeEventListener('vault:upload-folder', handleTriggerFolder);
-      window.removeEventListener('vault:new-folder', handleTriggerNewFolder);
-    };
-  }, [currentFolderId, user]);
 
   const loadAll = async (folderId = currentFolderId) => {
     setLoading(true);
@@ -111,13 +87,14 @@ export default function DashboardPage({
    * Folder Navigation
    */
   const handleOpenFolder = (folder) => {
-    setCurrentFolderId(folder.id);
-    setCurrentFolderName(folder.name);
+    if (!folder || !folder.id) return;
+    if (setCurrentFolderId) setCurrentFolderId(folder.id);
+    if (setCurrentFolderName) setCurrentFolderName(folder.name);
   };
 
   const handleNavigateBreadcrumb = (folderId) => {
-    setCurrentFolderId(folderId);
-    if (!folderId) setCurrentFolderName(null);
+    if (setCurrentFolderId) setCurrentFolderId(folderId);
+    if (!folderId && setCurrentFolderName) setCurrentFolderName(null);
   };
 
   /**
@@ -127,12 +104,17 @@ export default function DashboardPage({
     setError('');
     setSuccess('');
     try {
-      await api.folders.create({
+      const res = await api.folders.create({
         name: folderName,
         parentId: currentFolderId,
       });
       setSuccess(`Folder "${folderName}" created successfully!`);
-      loadAll(currentFolderId);
+      if (res && res.folder && res.folder.id) {
+        if (setCurrentFolderId) setCurrentFolderId(res.folder.id);
+        if (setCurrentFolderName) setCurrentFolderName(res.folder.name);
+      } else {
+        loadAll(currentFolderId);
+      }
     } catch (err) {
       setError(err.message || 'Failed to create folder.');
     }
@@ -185,27 +167,35 @@ export default function DashboardPage({
     uploadFolder(fileList, currentFolderId, () => loadAll(currentFolderId));
   };
 
-  // Auto-refresh vault contents when any background upload finishes
+  // Auto-refresh vault contents when any background upload or folder action finishes
   useEffect(() => {
     const handleUploaded = (e) => {
       if (!e.detail?.folderId || e.detail.folderId === currentFolderId) {
         loadAll(currentFolderId);
       }
     };
+    const handleRefresh = () => {
+      loadAll(currentFolderId);
+    };
     window.addEventListener('vault:item-uploaded', handleUploaded);
-    return () => window.removeEventListener('vault:item-uploaded', handleUploaded);
+    window.addEventListener('vault:refresh-view', handleRefresh);
+    return () => {
+      window.removeEventListener('vault:item-uploaded', handleUploaded);
+      window.removeEventListener('vault:refresh-view', handleRefresh);
+    };
   }, [currentFolderId]);
 
   // Filter based on search query
   const displayedOwned = ownedFiles.filter((f) =>
-    f.originalName.toLowerCase().includes(searchQuery.toLowerCase())
+    (f.originalName || '').toLowerCase().includes(activeSearch.toLowerCase())
   );
   const displayedShared = sharedFiles.filter((f) =>
-    f.originalName.toLowerCase().includes(searchQuery.toLowerCase())
+    (f.originalName || '').toLowerCase().includes(activeSearch.toLowerCase())
   );
   const displayedFolders = folders.filter((f) =>
-    f.name.toLowerCase().includes(searchQuery.toLowerCase())
+    (f.name || '').toLowerCase().includes(activeSearch.toLowerCase())
   );
+
 
   return (
     <div className="space-y-4">
@@ -244,7 +234,7 @@ export default function DashboardPage({
           onRefresh={() => loadAll(currentFolderId)}
           onOpenFolder={handleOpenFolder}
           onNavigateBreadcrumb={handleNavigateBreadcrumb}
-          onNewFolder={handleNewFolder}
+          onNewFolder={onOpenNewFolder || handleNewFolder}
           onFileUpload={handleFileUpload}
           onFolderUpload={handleFolderUpload}
           onRenameFolder={handleRenameFolder}
@@ -263,7 +253,7 @@ export default function DashboardPage({
           onRefresh={() => loadAll(currentFolderId)}
           onOpenFolder={handleOpenFolder}
           onNavigateBreadcrumb={handleNavigateBreadcrumb}
-          onNewFolder={handleNewFolder}
+          onNewFolder={onOpenNewFolder || handleNewFolder}
           onFileUpload={handleFileUpload}
           onFolderUpload={handleFolderUpload}
           onRenameFolder={handleRenameFolder}

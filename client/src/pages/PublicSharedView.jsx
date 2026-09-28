@@ -494,11 +494,12 @@ export default function PublicSharedView({ token, keyParam, onGoHome }) {
               <div>
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-lg tracking-tight">SecureVault</span>
-                  <span className="bg-slate-800 text-blue-300 text-xs font-semibold px-2 py-0.5 rounded border border-slate-700 flex items-center gap-1">
+                  <span className="hidden sm:flex bg-slate-800 text-blue-300 text-xs font-semibold px-2 py-0.5 rounded border border-slate-700 items-center gap-1">
                     <Lock className="w-3 h-3 text-emerald-400" /> Zero-Knowledge Link Portal
                   </span>
                 </div>
                 <p className="text-xs text-slate-400">Encrypted Access Control</p>
+
               </div>
             </div>
 

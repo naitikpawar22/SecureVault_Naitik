@@ -8,7 +8,17 @@ const getApiBase = () => {
   }
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
-    if (host === 'localhost' || host === '127.0.0.1') {
+    const port = window.location.port;
+    if (
+      import.meta.env.DEV ||
+      port === '5173' ||
+      port === '3000' ||
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      host.endsWith('.local')
+    ) {
       return '/api';
     }
   }

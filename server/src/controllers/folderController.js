@@ -16,11 +16,12 @@ const createFolder = async (req, res, next) => {
     const trimmedName = name.trim() || 'Untitled folder';
 
     // Verify parent folder if provided
+    const validParentId = parentId && parentId !== 'root' && parentId !== 'null' && parentId !== 'undefined' ? parentId : null;
     let parentFolder = null;
     let parentPrefix = `vault/${req.user._id}`;
-    if (parentId) {
+    if (validParentId) {
       parentFolder = await Folder.findOne({
-        _id: parentId,
+        _id: validParentId,
         status: 'active',
         $or: [
           { ownerId: req.user._id },
@@ -41,7 +42,7 @@ const createFolder = async (req, res, next) => {
     const folder = await Folder.create({
       name: trimmedName,
       ownerId: req.user._id,
-      parentId: parentId || null,
+      parentId: validParentId,
       s3Prefix,
       color,
     });

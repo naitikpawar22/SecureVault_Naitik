@@ -58,20 +58,21 @@ export default function Sidebar({
   ];
 
   return (
-    <aside className="w-64 bg-[#f8fafc] border-r border-slate-200/90 h-screen flex flex-col justify-between select-none shrink-0 sticky top-0">
+    <aside className="w-64 bg-white border-r-2 border-slate-300 h-full md:h-screen flex flex-col justify-between select-none shrink-0 sticky top-0 overflow-hidden">
       {/* Top Section */}
-      <div className="p-4 space-y-4">
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+
         {/* Brand / Logo */}
         <div className="flex items-center space-x-3 px-1">
           <div className="w-9 h-9 rounded-xl bg-[#1e40af] text-white flex items-center justify-center shadow-sm">
-            <Shield className="w-5 h-5" />
+            <Shield className="w-5 h-5 stroke-[2.5]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-bold text-base text-slate-900 tracking-tight">SecureVault</span>
             </div>
-            <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-              <Lock className="w-2.5 h-2.5 text-emerald-600" /> Zero-Knowledge E2EE
+            <p className="text-[10px] text-slate-600 font-mono font-semibold flex items-center gap-1">
+              <Lock className="w-2.5 h-2.5 text-emerald-600 stroke-[2.5]" /> Zero-Knowledge E2EE
             </p>
           </div>
         </div>
@@ -82,11 +83,12 @@ export default function Sidebar({
             onNewFolder={onNewFolder}
             onFileUpload={onFileUpload}
             onFolderUpload={onFolderUpload}
+            enableShortcuts={true}
           />
         </div>
 
         {/* Navigation List */}
-        <nav className="space-y-0.5 pt-2">
+        <nav className="space-y-1 pt-2">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -98,13 +100,13 @@ export default function Sidebar({
                   setActiveTab(item.id);
                   if (onCloseMobile) onCloseMobile();
                 }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-150 text-left ${
+                className={`w-full flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl text-xs transition-all duration-150 text-left ${
                   isActive
-                    ? 'bg-blue-100/70 text-[#1e40af] font-bold shadow-2xs'
-                    : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
+                    ? 'bg-blue-50 text-[#1e40af] font-bold border-2 border-blue-200 shadow-2xs'
+                    : 'text-slate-800 font-semibold hover:bg-slate-100 hover:text-slate-950 border-2 border-transparent'
                 }`}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#1e40af]' : 'text-slate-500'}`} />
+                <Icon className={`w-4 h-4 shrink-0 stroke-[2.5] ${isActive ? 'text-[#1e40af]' : 'text-slate-600'}`} />
                 <span className="truncate">{item.label}</span>
                 {item.id === 'shared' && unreadSharedCount > 0 && (
                   <span className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-bold bg-red-600 text-white rounded-full leading-none shadow-xs animate-in zoom-in-75 duration-150">
@@ -123,16 +125,16 @@ export default function Sidebar({
       </div>
 
       {/* Bottom Section */}
-      <div className="p-4 space-y-4 border-t border-slate-200/80 bg-white/50">
+      <div className="p-4 space-y-3.5 border-t-2 border-slate-300 bg-slate-50/70">
         {/* Key Status Pill */}
         <div>
           {privateKey ? (
-            <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-medium">
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-emerald-50 border-2 border-emerald-300 text-emerald-950 text-xs font-bold shadow-2xs">
               <span className="flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <ShieldCheck className="w-4 h-4 text-emerald-600 stroke-[2.5]" />
                 <span>Private Key Active</span>
               </span>
-              <span className="text-[9px] font-mono bg-emerald-200/60 px-1 py-0.2 rounded text-emerald-900">
+              <span className="text-[10px] font-mono font-bold bg-emerald-200/80 px-1.5 py-0.5 rounded text-emerald-950">
                 ECDH
               </span>
             </div>
@@ -140,42 +142,43 @@ export default function Sidebar({
             <button
               onClick={onUnlockKey}
               type="button"
-              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-medium hover:bg-amber-100 transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-amber-50 border-2 border-amber-400 text-amber-950 text-xs font-bold hover:bg-amber-100 transition-colors shadow-2xs"
             >
               <span className="flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+                <KeyRound className="w-4 h-4 text-amber-800 stroke-[2.5]" />
                 <span>Unlock Private Key</span>
               </span>
-              <ChevronRight className="w-3.5 h-3.5 text-amber-700" />
+              <ChevronRight className="w-4 h-4 text-amber-800 stroke-[2.5]" />
             </button>
           )}
         </div>
 
-        {/* Horizontal Storage Line Bar: "...GB of 100 GB used" */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] text-slate-600">
-            <span className="flex items-center gap-1 font-medium">
-              <HardDrive className="w-3.5 h-3.5 text-slate-500" />
+        {/* Horizontal Storage Box: "...GB of 100 GB used" */}
+        <div className="p-3 bg-white border-2 border-slate-200 rounded-xl space-y-2 shadow-2xs">
+          <div className="flex items-center justify-between text-xs text-slate-800 font-bold">
+            <span className="flex items-center gap-1.5">
+              <HardDrive className="w-3.5 h-3.5 text-blue-600 stroke-[2.5]" />
               <span>Storage</span>
             </span>
-            <span className="font-mono text-[10px] text-slate-500">100 GB Plan</span>
+            <span className="font-mono text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 font-bold">100 GB</span>
           </div>
 
           {/* Horizontal Progress Bar */}
-          <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+          <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden border border-slate-300">
             <div
-              className="bg-[#1e40af] h-1.5 rounded-full transition-all duration-300"
+              className="bg-[#1e40af] h-2 rounded-full transition-all duration-300"
               style={{ width: `${percentUsed}%` }}
             />
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+          <div className="flex items-center justify-between text-xs text-slate-700 font-mono font-bold">
             <span>
-              {totalBytes >= 1024 * 1024 * 1024 ? `${usedGB} GB` : `${usedMB} MB`} of 100 GB used
+              {totalBytes >= 1024 * 1024 * 1024 ? `${usedGB} GB` : `${usedMB} MB`} used
             </span>
-            <span className="text-[10px]">{percentUsed}%</span>
+            <span className="text-[11px] text-slate-900">{percentUsed}%</span>
           </div>
         </div>
+
 
         {/* User Profile & Logout */}
         <div className="flex items-center justify-between pt-2 border-t border-slate-200">

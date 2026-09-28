@@ -80,11 +80,15 @@ app.use('/api', apiLimiter);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
+  const mongoose = require('mongoose');
   res.status(200).json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     service: 'SecureVault API',
     version: '1.0.0',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    databaseHost: mongoose.connection.host || 'unknown',
+    databaseName: mongoose.connection.name || 'unknown',
     s3Bucket: config.aws.bucket,
     s3Region: config.aws.region,
   });

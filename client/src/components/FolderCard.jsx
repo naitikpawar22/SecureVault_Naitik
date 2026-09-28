@@ -54,23 +54,26 @@ export default function FolderCard({
       onClick={() => {
         if (!isEditing && onOpen) onOpen(folder);
       }}
-      className="bg-white rounded-xl border border-slate-200 hover:border-[#1e40af] hover:shadow-md transition-all duration-200 p-4 flex flex-col justify-between cursor-pointer group relative select-none min-h-[140px]"
+      className="bg-white rounded-2xl border-2 border-slate-300 hover:border-[#1e40af] shadow-xs hover:shadow-lg transition-all duration-200 p-4 flex flex-col justify-between cursor-pointer group relative select-none min-h-[140px]"
     >
       {/* Top Header: Folder Icon and 3-dots Menu */}
       <div className="flex items-start justify-between">
-        <div className="w-11 h-11 rounded-lg bg-blue-50 group-hover:bg-[#1e40af] flex items-center justify-center transition-colors">
+        <div className="w-11 h-11 rounded-xl bg-blue-100/70 border border-blue-200 group-hover:bg-[#1e40af] flex items-center justify-center transition-all">
           <Folder className="w-6 h-6 text-[#1e40af] group-hover:text-white transition-colors fill-blue-500/20 group-hover:fill-white/20" />
         </div>
+
 
         {/* 3-dots Menu */}
         <div className="relative" ref={menuRef} onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+            title="Folder Options"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
+
 
           {menuOpen && (
             <div className="absolute right-0 mt-1 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 z-30 text-xs">
@@ -177,18 +180,18 @@ export default function FolderCard({
           </form>
         ) : (
           <h4
-            className="text-xs font-semibold text-slate-900 truncate group-hover:text-[#1e40af] transition-colors"
+            className="text-sm font-bold text-slate-900 truncate group-hover:text-[#1e40af] transition-colors tracking-tight"
             title={folder.name}
           >
             {folder.name}
           </h4>
         )}
 
-        <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
-          <span>{folder.itemCount || 0} {folder.itemCount === 1 ? 'item' : 'items'}</span>
+        <div className="flex items-center justify-between text-xs font-bold text-slate-700 mt-1.5 font-mono">
+          <span className="bg-slate-100 text-slate-900 px-2 py-0.5 rounded-md border border-slate-200 font-bold">{folder.itemCount || 0} {folder.itemCount === 1 ? 'item' : 'items'}</span>
           {folder.isOwner === false && folder.owner && (
             <span
-              className="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-medium truncate max-w-[110px]"
+              className="text-[10px] text-blue-900 bg-blue-100/80 border border-blue-200 px-2 py-0.5 rounded font-bold truncate max-w-[110px]"
               title={`Shared by ${folder.owner.name || folder.owner.email}`}
             >
               {folder.owner.name || folder.owner.email}
@@ -199,3 +202,4 @@ export default function FolderCard({
     </div>
   );
 }
+

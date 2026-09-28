@@ -16,8 +16,9 @@ import {
 } from 'lucide-react';
 
 export default function RegisterPage({ onNavigateLogin }) {
-  const { prepareRegistration, completeRegistration } = useAuth();
+  const { prepareRegistration, completeRegistration, register } = useAuth();
   const [step, setStep] = useState('credentials'); // 'credentials' | 'mfa_setup'
+  const [enableMfaOnSignup, setEnableMfaOnSignup] = useState(false);
 
   // Form Fields
   const [name, setName] = useState('');
@@ -39,7 +40,7 @@ export default function RegisterPage({ onNavigateLogin }) {
   const [success, setSuccess] = useState('');
 
   /**
-   * Handle Step 1: Initial Registration & Browser Cryptographic Key Generation
+   * Handle Registration: Generates Browser Keys & Persists User to MongoDB Atlas
    */
   const handleCredentialsSubmit = async (e) => {
     e.preventDefault();
@@ -63,24 +64,27 @@ export default function RegisterPage({ onNavigateLogin }) {
 
     try {
       setStatusMessage('Generating ECDH P-256 cryptographic keypair in browser...');
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 150));
 
       setStatusMessage('Deriving Master Key Encryption Key (PBKDF2 SHA-256)...');
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 150));
 
-      setStatusMessage('Registering account with zero-knowledge public key...');
-      const regData = await prepareRegistration(name, email, password);
-      setRegisteredData(regData);
+      if (enableMfaOnSignup) {
+        setStatusMessage('Registering credentials to MongoDB & preparing MFA...');
+        const regData = await prepareRegistration(name, email, password);
+        setRegisteredData(regData);
 
-      // Immediately fetch TOTP secret & QR Code for Google Authenticator
-      setStatusMessage('Generating Google Authenticator TOTP QR code...');
-      const mfaRes = await api.auth.setupMfa();
-      setSecret(mfaRes.secret);
-      setQrCode(mfaRes.qrCode);
-
-      // Transition to Google Authenticator setup step
-      setStep('mfa_setup');
-      setStatusMessage('');
+        setStatusMessage('Generating Google Authenticator TOTP QR code...');
+        const mfaRes = await api.auth.setupMfa();
+        setSecret(mfaRes.secret);
+        setQrCode(mfaRes.qrCode);
+        setStep('mfa_setup');
+        setStatusMessage('');
+      } else {
+        setStatusMessage('Persisting credentials & zero-knowledge keys to MongoDB Atlas...');
+        await register(name, email, password);
+        setSuccess('Account created and saved to MongoDB successfully! Entering vault...');
+      }
     } catch (err) {
       console.error('Registration error:', err);
       setError(err.message || 'Registration failed.');
@@ -245,9 +249,19 @@ export default function RegisterPage({ onNavigateLogin }) {
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Zero-Knowledge Security Model:
                 </div>
                 <p>
-                  Your private key is encrypted client-side with your password before upload. The server and storage providers can never decrypt your files.
+                  Your private key is encrypted client-side with your password before upload. Credentials and keys are saved securely in MongoDB Atlas.
                 </p>
               </div>
+
+              <label className="flex items-center gap-2 cursor-pointer pt-1 pb-1 text-xs text-[#334155]">
+                <input
+                  type="checkbox"
+                  checked={enableMfaOnSignup}
+                  onChange={(e) => setEnableMfaOnSignup(e.target.checked)}
+                  className="w-4 h-4 rounded border-[#cbd5e1] text-[#1e40af] focus:ring-[#1e40af]"
+                />
+                <span className="font-medium text-[11px]">Configure Google Authenticator (TOTP 2FA) immediately</span>
+              </label>
 
               <button
                 type="submit"
@@ -257,12 +271,12 @@ export default function RegisterPage({ onNavigateLogin }) {
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="truncate">{statusMessage || 'Setting Up Keys...'}</span>
+                    <span className="truncate">{statusMessage || 'Setting Up Account...'}</span>
                   </>
                 ) : (
                   <>
                     <UserCheck className="w-4 h-4" />
-                    <span>Generate Keys & Continue</span>
+                    <span>Create Account & Save to MongoDB</span>
                   </>
                 )}
               </button>

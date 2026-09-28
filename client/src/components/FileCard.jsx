@@ -18,7 +18,9 @@ import {
   GitBranch,
   Link as LinkIcon,
   Users,
+  Shield,
 } from 'lucide-react';
+
 
 export default function FileCard({
   file,
@@ -94,26 +96,37 @@ export default function FileCard({
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="bg-white rounded-xl border border-[#cbd5e1] hover:border-[#1e40af] hover:shadow-md transition-all duration-200 flex flex-col overflow-hidden group min-h-[300px]"
+      className="bg-white rounded-2xl border-2 border-slate-300 hover:border-[#1e40af] shadow-xs hover:shadow-lg transition-all duration-200 flex flex-col overflow-hidden group min-h-[310px]"
     >
       {/* Upper Half: Stylized File Thumbnail / Preview Canvas */}
-      <div className="h-[145px] bg-gradient-to-b from-[#f8fafc] to-[#f1f5f9] p-3 flex flex-col justify-between border-b border-[#e2e8f0] relative overflow-hidden select-none">
+      <div className="h-[148px] bg-gradient-to-b from-slate-50 to-slate-100 p-3 flex flex-col justify-between border-b-2 border-slate-200 relative overflow-hidden select-none">
         {/* Top Badges Bar */}
         <div className="flex items-center justify-between z-10 w-full">
           {/* Role Badge */}
           {isSharedView ? (
             <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border truncate max-w-[120px] ${
+              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border-2 truncate max-w-[130px] shadow-2xs ${
                 file.role === 'editor'
-                  ? 'bg-indigo-100 text-indigo-900 border-indigo-200'
-                  : 'bg-blue-100 text-blue-900 border-blue-200'
+                  ? 'bg-indigo-50 text-indigo-900 border-indigo-300'
+                  : 'bg-sky-50 text-sky-900 border-sky-300'
               }`}
             >
-              {file.role === 'editor' ? 'Editor' : 'View Only'}
+              {file.role === 'editor' ? (
+                <>
+                  <Edit2 className="w-2.5 h-2.5 text-indigo-700 shrink-0 stroke-[2.5]" />
+                  <span>Editor</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="w-2.5 h-2.5 text-sky-700 shrink-0 stroke-[2.5]" />
+                  <span>View Only</span>
+                </>
+              )}
             </span>
           ) : (
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-slate-200 text-[#0f172a] border border-slate-300">
-              {file.role || 'Owner'}
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-900 border-2 border-slate-300 shadow-2xs">
+              <Shield className="w-2.5 h-2.5 text-slate-700 shrink-0 stroke-[2.5]" />
+              <span>{file.role || 'Owner'}</span>
             </span>
           )}
 
@@ -126,11 +139,13 @@ export default function FileCard({
               else if (onAudit) onAudit(file);
             }}
             title={`Revision v${file.currentVersion || 1} • Click to view Version History & Revisions`}
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white/95 text-[#1e40af] border border-slate-200 hover:border-[#1e40af] hover:bg-blue-50 shadow-2xs transition-all cursor-pointer flex items-center gap-0.5"
+            className="px-2.5 py-0.5 rounded-lg text-[10px] font-mono font-bold bg-white text-[#1e40af] border-2 border-blue-300 hover:border-[#1e40af] hover:bg-blue-50 shadow-2xs transition-all cursor-pointer flex items-center gap-1"
           >
+            <GitBranch className="w-2.5 h-2.5 text-[#1e40af] stroke-[2.5]" />
             <span>v{file.currentVersion || 1}</span>
           </button>
         </div>
+
 
         {/* Center Thumbnail Representation */}
         <div className="flex-1 flex items-center justify-center my-1 z-0">
@@ -237,7 +252,7 @@ export default function FileCard({
       </div>
 
       {/* Lower Half: File Information & Action Toolbar */}
-      <div className="p-3.5 flex-1 flex flex-col justify-between bg-white space-y-3">
+      <div className="p-4 flex-1 flex flex-col justify-between bg-white space-y-3">
         {/* Name and Size */}
         <div>
           {isEditing ? (
@@ -248,13 +263,13 @@ export default function FileCard({
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={handleSaveRename}
-                className="w-full text-xs font-semibold px-2 py-1 border border-[#1e40af] rounded bg-white text-slate-900 focus:outline-hidden"
+                className="w-full text-xs font-bold px-2 py-1.5 border-2 border-[#1e40af] rounded-lg bg-white text-slate-900 focus:outline-hidden"
               />
             </form>
           ) : (
             <div className="flex items-center justify-between group/title">
               <h4
-                className="text-xs font-semibold text-[#0f172a] truncate group-hover:text-[#1e40af] transition-colors flex-1"
+                className="text-sm font-bold text-slate-900 truncate group-hover:text-[#1e40af] transition-colors flex-1 tracking-tight"
                 title={file.originalName}
               >
                 {file.originalName}
@@ -264,32 +279,33 @@ export default function FileCard({
                   type="button"
                   onClick={() => setIsEditing(true)}
                   title="Rename File"
-                  className="opacity-0 group-hover/title:opacity-100 p-1 text-slate-400 hover:text-[#1e40af] transition-opacity"
+                  className="opacity-0 group-hover/title:opacity-100 p-1 text-slate-500 hover:text-[#1e40af] transition-opacity"
                 >
-                  <Edit2 className="w-3 h-3" />
+                  <Edit2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </button>
               )}
             </div>
           )}
-          <div className="flex items-center justify-between text-[11px] text-[#64748b] mt-1 font-mono">
-            <span>{formatSize(file.encryptedSize)}</span>
-            <span>{file.createdAt ? new Date(file.createdAt).toLocaleDateString() : 'Active'}</span>
+          <div className="flex items-center justify-between text-xs font-bold text-slate-700 mt-1.5 font-mono">
+            <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded-md border border-slate-300 font-bold">{formatSize(file.encryptedSize)}</span>
+            <span className="text-slate-600 font-semibold">{file.createdAt ? new Date(file.createdAt).toLocaleDateString() : 'Active'}</span>
           </div>
           {isSharedView && file.sharedBy && (
-            <div className="text-[10px] text-[#94a3b8] truncate mt-0.5">
+            <div className="text-[11px] font-semibold text-slate-600 truncate mt-1">
               Shared by: {file.sharedBy.name || file.sharedBy.email}
             </div>
           )}
         </div>
 
         {/* Action Toolbar */}
-        <div className="pt-2 border-t border-[#f1f5f9] flex items-center justify-between">
-          <div className="flex items-center space-x-1">
+        <div className="pt-2.5 border-t-2 border-slate-100 flex items-center justify-between gap-1">
+
+          <div className="flex items-center gap-0.5 sm:gap-1 flex-wrap">
             {/* Decrypt & Preview */}
             <button
               onClick={() => onPreview(file)}
-              title="Decrypt & Preview"
-              className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+              title="Decrypt & Preview in Browser"
+              className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
             >
               <Eye className="w-3.5 h-3.5" />
             </button>
@@ -299,7 +315,7 @@ export default function FileCard({
               <button
                 onClick={() => setIsEditing(true)}
                 title="Rename File"
-                className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
               >
                 <Edit2 className="w-3.5 h-3.5" />
               </button>
@@ -311,7 +327,7 @@ export default function FileCard({
                 onClick={() => onDownload(file)}
                 disabled={downloading}
                 title="Decrypt & Download Plaintext"
-                className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors disabled:opacity-50"
+                className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
               >
                 {downloading ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1e40af]" />
@@ -328,7 +344,7 @@ export default function FileCard({
                   <button
                     onClick={() => onGenerateLink(file)}
                     title="Generate Secure Share Link"
-                    className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                    className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
                   >
                     <LinkIcon className="w-3.5 h-3.5" />
                   </button>
@@ -338,7 +354,7 @@ export default function FileCard({
                   <button
                     onClick={() => onManageAccess(file)}
                     title="Manage Access & Permissions"
-                    className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                    className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
                   >
                     <Users className="w-3.5 h-3.5" />
                   </button>
@@ -347,7 +363,7 @@ export default function FileCard({
                 <button
                   onClick={() => onShare(file)}
                   title="Share with Users"
-                  className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+                  className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
                 >
                   <Share2 className="w-3.5 h-3.5" />
                 </button>
@@ -360,8 +376,8 @@ export default function FileCard({
                 if (onViewVersions) onViewVersions(file);
                 else onAudit(file);
               }}
-              title="View Version History & Historical Revisions"
-              className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+              title="View Version History & Revisions"
+              className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
             >
               <GitBranch className="w-3.5 h-3.5" />
             </button>
@@ -370,7 +386,7 @@ export default function FileCard({
             <button
               onClick={() => onAudit(file)}
               title="View Cryptographic Audit Trail"
-              className="p-1.5 text-[#475569] hover:text-[#1e40af] hover:bg-[#f1f5f9] rounded transition-colors"
+              className="p-1.5 text-slate-600 hover:text-[#1e40af] hover:bg-blue-50 rounded-lg transition-colors"
             >
               <History className="w-3.5 h-3.5" />
             </button>
@@ -382,7 +398,7 @@ export default function FileCard({
               onClick={() => onDelete(file)}
               disabled={deleting}
               title="Delete File"
-              className="p-1.5 text-[#94a3b8] hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 shrink-0"
             >
               {deleting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-red-600" />
@@ -393,6 +409,7 @@ export default function FileCard({
           )}
         </div>
       </div>
+
     </div>
   );
 }

@@ -1,12 +1,15 @@
 # SecureVault – Enterprise Zero-Knowledge Cloud Storage & E2EE Vault
 
+🌐 **Live Production URL:** [https://naitik.app](https://naitik.app) *(Hosted on Apache Web Server with SSL/TLS)*
+
+[![Live Deployment](https://img.shields.io/badge/Live%20URL-https%3A%2F%2Fnaitik.app-2ea44f?style=for-the-badge&logo=apache&logoColor=white)](https://naitik.app)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-Verified%20100%25-success.svg)](#1-security-audit-notes)
 [![E2EE Cryptography](https://img.shields.io/badge/Cryptography-AES--256--GCM%20%7C%20ECDH%20P--256-blueviolet.svg)](#2-cryptographic-architecture--zero-knowledge-guarantees)
 [![AWS S3](https://img.shields.io/badge/Storage-Amazon%20S3%20Multipart-orange.svg)](#3-performance-profiling--large-file-streaming-sla)
 
-**SecureVault** is a state-of-the-art, zero-knowledge, end-to-end encrypted (E2EE) cloud storage platform engineered to provide mathematical guarantees of data privacy, granular role-based access control (ACL), and high-performance multipart streaming for large files up to **1GB+**.
+**SecureVault** is a state-of-the-art, zero-knowledge, end-to-end encrypted (E2EE) cloud storage platform engineered to provide mathematical guarantees of data privacy, granular role-based access control (ACL), and high-performance multipart streaming for large files up to **1GB+**. Accessible live at **[https://naitik.app](https://naitik.app)**.
 
 All file encryption and key wrapping operations execute client-side in the user's browser using the W3C Web Crypto API (`SubtleCrypto`). The backend server and Amazon S3 storage provider never receive, store, or log plaintext files or raw decryption keys.
 
@@ -357,6 +360,10 @@ npm test
 ---
 
 ## 9. Local Deployment Guide
+
+### Live Production Deployment
+- **Domain / URL:** [https://naitik.app](https://naitik.app)
+- **Web Server:** Apache HTTP Server configured with reverse proxy to Node.js backend and automated SSL/TLS encryption.
 
 ### Prerequisites
 - **Node.js**: v20.0.0 or higher
